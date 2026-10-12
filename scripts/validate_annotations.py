@@ -269,7 +269,7 @@ def validate(
                     severity="ERROR",
                 ))
 
-        # Aturan 9: Label alternatif maks. 2, tidak sama dengan label ganda
+        # Aturan 9: Label alternatif maks. 2, tidak identik dengan label utama
         if len(label_alts) > 2:
             issues.append(ValidationIssue(
                 rule_no=9,
@@ -278,16 +278,30 @@ def validate(
                 severity="ERROR",
             ))
         for la in label_alts:
-            if la in labels:
+            if la == label_raw:
                 issues.append(ValidationIssue(
                     rule_no=9,
                     id_abstrak=id_abs, id_segmen=id_seg, anotator_id=anotator,
                     pesan=(
-                        f"Label alternatif '{la}' sama dengan salah satu label ganda. "
-                        "Label alternatif berbeda dari label ganda."
+                        f"Label alternatif '{la}' identik dengan label utama '{label_raw}'. "
+                        "Label alternatif harus memberikan pembacaan berbeda dari label utama."
                     ),
-                    severity="WARNING",
+                    severity="ERROR",
                 ))
+            elif la in labels:
+                if "B4" in flags:
+                    # Sah berdasarkan Pedoman v1.0 Bagian 4 Langkah 0b (penulisan ulang alternatif dengan flag B4)
+                    pass
+                else:
+                    issues.append(ValidationIssue(
+                        rule_no=9,
+                        id_abstrak=id_abs, id_segmen=id_seg, anotator_id=anotator,
+                        pesan=(
+                            f"Label alternatif '{la}' sama dengan salah satu komponen label ganda '{label_raw}' tanpa flag B4. "
+                            "Label alternatif harus berbeda dari label ganda kecuali variasi penulisan ulang B4."
+                        ),
+                        severity="WARNING",
+                    ))
 
         # Aturan 10: Setiap flag harus memiliki alasan
         if flags and not alasan:

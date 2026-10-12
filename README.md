@@ -302,7 +302,7 @@ python tests\test_pipeline.py
 python -m pytest tests\test_pipeline.py -v
 ```
 
-**Hasil terakhir: 110 test, 110 lulus, 0 gagal, 0 dilewati.**
+**Hasil terakhir: 126 test, 126 lulus, 0 gagal, 0 dilewati.**
 
 | Kelompok | Jumlah | Cakupan |
 |---|---|---|
@@ -311,7 +311,7 @@ python -m pytest tests\test_pipeline.py -v
 | `TestValidasiPrepareFatal` | 5 | Fatal error menghentikan pipeline, tidak ada output |
 | `TestSegmentasi` | 7 | Kalimat, singkatan, desimal, tanda tanya, B5, urutan |
 | `TestSegmentasiURLDOI` | 3 | URL/DOI tidak menelan titik penutup kalimat |
-| `TestKonversiLS` | 7 | Label tunggal/ganda, UP, label_alt valid |
+| `TestKonversiLS` | 9 | Label tunggal/ganda, UP, validasi label_alt (identik error, subset B4) |
 | `TestKonversiLSError` | 2 | UP=Tidak + label terisi → error eksplisit |
 | `TestGroundTruth` | 8 | Konsensus dua anotator, adj, flag, TT, segmen luar antrean |
 | `TestGroundTruthSatuAnotator` | 3 | Satu anotator tidak diklaim konsensus |
@@ -321,11 +321,11 @@ python -m pytest tests\test_pipeline.py -v
 | `TestKelengkapanBlokir` | 4 | BLOKIR-TT dan BLOKIR-BELUMSELESAI (hard stop) |
 | `TestSegmentasiNearDup` | 2 | Near-dup memblokir segmentasi; abstrak unik disegmentasi |
 | `TestIntegrasi` | 4 | End-to-end: prepare, GT+kelengkapan, BLOKIR-TT, CLI args |
-| `TestGroundTruthFatalAndValidation` | 8 | Fatal duplikat/yatim, validasi label adjudikasi & konsensus |
+| `TestGroundTruthFatalAndValidation` | 12 | Fatal ID kosong/unfrozen/duplikat/yatim, validasi label adjudikasi & konsensus |
 | `TestKelengkapanStatusAndLabelValidation` | 7 | Validasi status_akhir, label_akhir kosong/invalid, dikecualikan K3/K5 |
-| `TestConvertLabelStudioAnotatorPriorityAndErrors` | 3 | CLI anotator-id priority, validasi label kosong/invalid |
-| `TestValidateAnnotationsHardening` | 4 | Exit code nonzero pada ERROR, label kosong, adjudikasi ganda |
-| `TestPrepareLabelStudioTasks` | 8 | Segmen tidak beku fatal, 0 tasks exit nonzero, duplikat ID abstrak/segmen, konsistensi 1-to-1 |
+| `TestConvertLabelStudioAnotatorPriorityAndErrors` | 8 | CLI anotator-id priority, validasi label kosong/invalid, validasi UP & pemicu_up |
+| `TestValidateAnnotationsHardening` | 7 | Exit code nonzero pada ERROR, label kosong, adjudikasi ganda, label_alt identik/B4 |
+| `TestPrepareLabelStudioTasks` | 10 | ID segmen kosong fatal, segmen tidak beku fatal, 0 tasks nonzero, duplikat, konsistensi 1-to-1 |
 
 ---
 
@@ -362,7 +362,7 @@ Label dataset/
 │   ├── build_ground_truth.py            # Ground truth lengkap (konsensus + adj)
 │   └── calculate_completeness.py        # Kelengkapan dari ground_truth.csv (K1–K8)
 ├── tests/
-│   └── test_pipeline.py                 # 110 test (20 kelompok, semua fungsi produksi)
+│   └── test_pipeline.py                 # 126 test (20 kelompok, semua fungsi produksi)
 ├── pedoman_v1.0_beku.md                 # Pedoman Anotasi v1.0 (JANGAN DIUBAH)
 ├── requirements.txt
 └── README.md

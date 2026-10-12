@@ -90,6 +90,7 @@ def load_segmen(path: Path) -> Tuple[Dict[str, List[Dict]], int]:
     """
     Muat segmen.csv ke dict id_abstrak -> list segmen (urut).
     Memeriksa keunikan ID segmen (ID duplikat dihitung sebagai fatal).
+    Memeriksa ID segmen kosong: ID segmen kosong adalah fatal error dan menghentikan proses.
     Memeriksa status_beku: jika ada segmen belum disetujui/dibekukan,
     tampilkan ID abstrak, ID segmen, dan statusnya, lalu hentikan proses.
     Return: (segmen_map, n_duplikat)
@@ -97,15 +98,21 @@ def load_segmen(path: Path) -> Tuple[Dict[str, List[Dict]], int]:
     segmen_map: Dict[str, List[Dict]] = {}
     seen_ids: Set[str] = set()
     n_dup = 0
+    n_empty_sid = 0
     unapproved: List[Tuple[str, str, str]] = []
 
     with open(path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
-        for row in reader:
+        for row_idx, row in enumerate(reader, start=1):
             sid = row.get("id_segmen", "").strip()
             aid = row.get("id_abstrak", "").strip()
             st = row.get("status_beku", "").strip()
             if not sid:
+                logger.error(
+                    f"FATAL: Baris {row_idx} di segmen.csv memiliki id_segmen KOSONG (id_abstrak='{aid}'). "
+                    "ID segmen wajib diisi untuk seluruh baris."
+                )
+                n_empty_sid += 1
                 continue
 
             if sid in seen_ids:
@@ -117,6 +124,13 @@ def load_segmen(path: Path) -> Tuple[Dict[str, List[Dict]], int]:
                 unapproved.append((aid, sid, st))
 
             segmen_map.setdefault(aid, []).append(row)
+
+    if n_empty_sid > 0:
+        logger.error(
+            f"FATAL: Ditemukan {n_empty_sid} baris dengan id_segmen KOSONG di {path}. "
+            "Pipeline dihentikan."
+        )
+        sys.exit(1)
 
     # Urutkan segmen per abstrak berdasarkan urutan
     for id_abstrak in segmen_map:

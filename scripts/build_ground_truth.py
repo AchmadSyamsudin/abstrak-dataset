@@ -95,35 +95,44 @@ def load_csv(path: Path) -> List[Dict]:
 
 def load_segmen(path: Path) -> Tuple[Dict[str, Dict], int]:
     """
-    id_segmen -> row; hanya baris yang dibekukan.
+    Muat segmen.csv ke dict id_segmen -> row.
     Return: (result_dict, n_fatal_errors)
-    ID segmen duplikat adalah FATAL ERROR — berhenti setelah pelaporan.
+    ID segmen kosong, segmen belum dibekukan, dan ID duplikat adalah FATAL ERROR.
+    Jangan melewati baris tersebut secara diam-diam.
     """
     result: Dict[str, Dict] = {}
-    n_skip = 0
-    n_dup = 0
-    for row in load_csv(path):
+    n_fatal = 0
+    for idx, row in enumerate(load_csv(path), start=1):
         sid = row.get("id_segmen", "").strip()
+        aid = row.get("id_abstrak", "").strip()
         if not sid:
+            logger.error(
+                f"FATAL: Baris {idx} di segmen.csv memiliki id_segmen KOSONG (id_abstrak='{aid}'). "
+                "Setiap baris di segmen.csv wajib memiliki ID segmen unik."
+            )
+            n_fatal += 1
             continue
+
         status = row.get("status_beku", "").strip().lower()
         if status not in ("disetujui", "beku"):
-            logger.warning(
-                f"Segmen '{sid}' status_beku='{status}' (bukan 'disetujui'/'beku'), "
-                "dilewati dari GT."
+            logger.error(
+                f"FATAL: Segmen '{sid}' (id_abstrak='{aid}') memiliki status_beku='{status}' "
+                "(bukan 'disetujui'/'beku'). Seluruh segmen di segmen.csv wajib dibekukan."
             )
-            n_skip += 1
+            n_fatal += 1
             continue
+
         if sid in result:
             logger.error(
                 f"FATAL: ID segmen duplikat di segmen.csv: '{sid}'. "
                 "Setiap segmen harus memiliki ID unik. Perbaiki segmen.csv."
             )
-            n_dup += 1
+            n_fatal += 1
+            continue
+
         result[sid] = row
-    if n_skip:
-        logger.warning(f"{n_skip} segmen belum dibekukan, dilewati dari GT.")
-    return result, n_dup
+
+    return result, n_fatal
 
 
 def load_anotasi(path: Path) -> Tuple[Dict[str, Dict], int]:
@@ -263,6 +272,15 @@ def build_ground_truth(
             )
             n_orphan += 1
     n_error += n_orphan
+
+    # Periksa segmen di adjudikasi yang tidak ada di segmen.csv (adjudikasi yatim)
+    for sid in sorted(adjudikasi.keys()):
+        if sid not in segmen_map:
+            logger.error(
+                f"FATAL: ID segmen '{sid}' ada di adjudikasi tetapi tidak di segmen.csv. "
+                "Adjudikasi yatim ini tidak diakui. Perbaiki adjudikasi atau segmen.csv."
+            )
+            n_error += 1
 
     # Proses setiap segmen yang dibekukan
     for sid in sorted(segmen_map.keys()):
@@ -505,6 +523,10 @@ def build_ground_truth(
                             f"label_alt_sisa memiliki {len(alt_parts)} alternatif (maksimal 2)"
                         )
                     for alt in alt_parts:
+                        if alt == adj_label:
+                            adj_errors.append(
+                                f"label_alt_sisa '{alt}' identik dengan label_akhir '{adj_label}'"
+                            )
                         sub_labels = [s.strip() for s in alt.split("+") if s.strip()]
                         invalid_sub = [s for s in sub_labels if s not in VALID_LABELS_KEPUTUSAN]
                         if invalid_sub:
@@ -606,7 +628,8 @@ def main() -> None:
     if n_fatal > 0:
         msg = (
             f"FATAL ERROR: {n_fatal} error fatal ditemukan pada input "
-            "(duplikat ID segmen/anotasi atau keputusan adjudikasi ganda). "
+            "(ID segmen kosong, status segmen belum dibekukan, duplikat ID, "
+            "atau keputusan adjudikasi ganda). "
             "Proses dihentikan tanpa menghasilkan ground_truth.csv."
         )
         logger.error(msg)

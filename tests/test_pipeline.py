@@ -13,7 +13,7 @@ PRINSIP (TIDAK BOLEH DILANGGAR):
 - Integration test menggunakan direktori sementara yang terisolasi.
 - Test tidak menganggap lulus jika fungsi produksi belum dipanggil.
 
-KELOMPOK TEST (total 110 test):
+KELOMPOK TEST (total 126 test):
  1. TestNormalisasi              - normalisasi minimal (prepare_abstrak.py)
  2. TestDeduplikasi              - dedup DOI/hash/Jaccard
  3. TestValidasiPrepareFatal     - fatal errors menghentikan pipeline
@@ -332,11 +332,17 @@ class TestKonversiLS(unittest.TestCase):
         self.build_label = build_label_string
         self.validate_alt = validate_label_alt
 
-    def _make_results(self, label_1="TJ", up="Tidak", labels_extra=None):
+    def _make_results(self, label_1="TJ", up="Tidak", labels_extra=None, pemicu_up=None):
         results = [
             {"from_name": "label_1", "value": {"choices": [label_1]}},
-            {"from_name": "uji_pemecahan", "value": {"choices": [up]}},
+            {"from_name": "uji_pemecahan", "value": {"choices": [up] if up else []}},
         ]
+        if up == "Ya":
+            p_up = pemicu_up if pemicu_up is not None else ["U1"]
+            if p_up:
+                results.append({"from_name": "pemicu_up", "value": {"choices": p_up}})
+        elif pemicu_up is not None:
+            results.append({"from_name": "pemicu_up", "value": {"choices": pemicu_up}})
         if labels_extra:
             for i, lbl in enumerate(labels_extra, start=2):
                 results.append({"from_name": f"label_{i}", "value": {"choices": [lbl]}})
@@ -372,6 +378,18 @@ class TestKonversiLS(unittest.TestCase):
         self.assertEqual(alt, "HS;LB")
         self.assertEqual(status, "ok")
 
+    def test_label_alt_identik_dengan_label_utama_error(self):
+        """label_alt identik dengan label utama → error eksplisit (bukan alternatif)."""
+        alt, catatan, status = self.validate_alt("TJ", "TJ", "TEST_S01", 1)
+        self.assertEqual(status, "error")
+        self.assertIn("identik", catatan)
+
+    def test_label_alt_subset_multi_label_dengan_flag_b4_ok(self):
+        """label_alt subset parsial dari multi-label dengan flag B4 → SAH (Pedoman Bagian 4 Langkah 0b)."""
+        alt, catatan, status = self.validate_alt("MT", "TJ+MT", "TEST_S01", 1, flags=["B4"])
+        self.assertEqual(status, "ok")
+        self.assertEqual(alt, "MT")
+
     def test_label_alt_tidak_valid_error(self):
         """label_alt tidak valid → error eksplisit, tidak dipotong diam-diam."""
         alt, catatan, status = self.validate_alt("HS;INVALID", "TJ", "TEST_S01", 1)
@@ -393,11 +411,17 @@ class TestKonversiLSError(unittest.TestCase):
         from convert_labelstudio_export import build_label_string
         self.build_label = build_label_string
 
-    def _make_results(self, label_1, up, labels_extra=None):
+    def _make_results(self, label_1, up, labels_extra=None, pemicu_up=None):
         results = [
             {"from_name": "label_1", "value": {"choices": [label_1]}},
-            {"from_name": "uji_pemecahan", "value": {"choices": [up]}},
+            {"from_name": "uji_pemecahan", "value": {"choices": [up] if up else []}},
         ]
+        if up == "Ya":
+            p_up = pemicu_up if pemicu_up is not None else ["U1"]
+            if p_up:
+                results.append({"from_name": "pemicu_up", "value": {"choices": p_up}})
+        elif pemicu_up is not None:
+            results.append({"from_name": "pemicu_up", "value": {"choices": pemicu_up}})
         if labels_extra:
             for i, lbl in enumerate(labels_extra, start=2):
                 results.append({"from_name": f"label_{i}", "value": {"choices": [lbl]}})
@@ -1394,6 +1418,113 @@ class TestGroundTruthFatalAndValidation(unittest.TestCase):
         self.assertNotIn("Semua segmen telah selesai", laporan)
         self.assertIn("BELUM SELESAI", laporan)
 
+    def test_segmen_empty_id_segmen_fatal(self):
+        """Baris dengan id_segmen kosong di segmen.csv adalah fatal error dan menghentikan CLI dengan kode nonzero."""
+        import subprocess
+        from build_ground_truth import load_segmen
+        seg_path = self.tmp / "segmen_empty_sid.csv"
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [
+                {"id_abstrak": "TEST_A01", "id_segmen": "TEST_S01", "urutan": "1", "teks_segmen": "T1", "status_beku": "disetujui"},
+                {"id_abstrak": "TEST_A01", "id_segmen": "", "urutan": "2", "teks_segmen": "T2", "status_beku": "disetujui"},
+            ]
+        )
+        _, n_fatal = load_segmen(seg_path)
+        self.assertGreater(n_fatal, 0)
+
+        an1_path = self.tmp / "an1_dummy.csv"
+        adj_path = self.tmp / "adj_dummy.csv"
+        self._write_csv(an1_path,
+            ["id_abstrak", "id_segmen", "label", "flag", "alasan", "simpul_penentu", "versi_pedoman"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "TEST_S01", "label": "TJ", "flag": "", "alasan": "", "simpul_penentu": "", "versi_pedoman": "v1.0"}]
+        )
+        self._write_csv(adj_path,
+            ["id_abstrak", "id_segmen", "label_akhir", "label_alt_sisa", "status_akhir", "adjudikator_id", "alasan"],
+            []
+        )
+        out_dir = self.tmp / "out_gt_empty_sid"
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "build_ground_truth.py"),
+             "--segmen", str(seg_path), "--anotasi-1", str(an1_path),
+             "--adjudikasi", str(adj_path), "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertNotEqual(res.returncode, 0, "Harus exit nonzero jika ada id_segmen kosong")
+        self.assertFalse((out_dir / "ground_truth.csv").exists())
+        laporan_path = out_dir / "laporan_ground_truth.txt"
+        self.assertTrue(laporan_path.exists())
+        laporan = laporan_path.read_text(encoding="utf-8")
+        self.assertIn("LAPORAN GROUND TRUTH (GAGAL)", laporan)
+        self.assertNotIn("Ground truth siap digunakan", laporan)
+
+    def test_segmen_unfrozen_status_fatal(self):
+        """Baris dengan status_beku bukan 'disetujui'/'beku' di segmen.csv adalah fatal error dan menghentikan CLI."""
+        import subprocess
+        from build_ground_truth import load_segmen
+        seg_path = self.tmp / "segmen_unfrozen.csv"
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [
+                {"id_abstrak": "TEST_A01", "id_segmen": "TEST_S01", "urutan": "1", "teks_segmen": "T1", "status_beku": "disetujui"},
+                {"id_abstrak": "TEST_A01", "id_segmen": "TEST_S02", "urutan": "2", "teks_segmen": "T2", "status_beku": "draft"},
+            ]
+        )
+        _, n_fatal = load_segmen(seg_path)
+        self.assertGreater(n_fatal, 0)
+
+        an1_path = self.tmp / "an1_dummy2.csv"
+        adj_path = self.tmp / "adj_dummy2.csv"
+        self._write_csv(an1_path,
+            ["id_abstrak", "id_segmen", "label", "flag", "alasan", "simpul_penentu", "versi_pedoman"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "TEST_S01", "label": "TJ", "flag": "", "alasan": "", "simpul_penentu": "", "versi_pedoman": "v1.0"}]
+        )
+        self._write_csv(adj_path,
+            ["id_abstrak", "id_segmen", "label_akhir", "label_alt_sisa", "status_akhir", "adjudikator_id", "alasan"],
+            []
+        )
+        out_dir = self.tmp / "out_gt_unfrozen"
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "build_ground_truth.py"),
+             "--segmen", str(seg_path), "--anotasi-1", str(an1_path),
+             "--adjudikasi", str(adj_path), "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertNotEqual(res.returncode, 0, "Harus exit nonzero jika ada segmen belum dibekukan")
+        self.assertFalse((out_dir / "ground_truth.csv").exists())
+        laporan_path = out_dir / "laporan_ground_truth.txt"
+        self.assertTrue(laporan_path.exists())
+        laporan = laporan_path.read_text(encoding="utf-8")
+        self.assertIn("LAPORAN GROUND TRUTH (GAGAL)", laporan)
+        self.assertNotIn("Ground truth siap digunakan", laporan)
+
+    def test_adjudikasi_yatim_fatal(self):
+        """Segmen di adjudikasi tetapi tidak di segmen.csv diperlakukan sebagai error yang menghalangi status siap."""
+        from build_ground_truth import build_ground_truth
+        seg_map = {
+            "TEST_S01": {"id_segmen": "TEST_S01", "id_abstrak": "TEST_A01", "urutan": "1", "teks_segmen": "T1", "status_beku": "disetujui"}
+        }
+        ann1 = {"TEST_S01": {"id_segmen": "TEST_S01", "id_abstrak": "TEST_A01", "label": "TJ", "flag": "", "alasan": "", "simpul_penentu": "", "versi_pedoman": "v1.0"}}
+        adj = {
+            "TEST_S99": {"id_segmen": "TEST_S99", "id_abstrak": "TEST_A01", "label_akhir": "MT", "status_akhir": "final", "adjudikator_id": "adj1", "alasan": "tes"}
+        }
+        _, stats = build_ground_truth(seg_map, ann1, None, adj, single_annotator_no_adj=True)
+        self.assertGreater(stats.get("n_error", 0), 0)
+
+    def test_adjudikasi_alt_sisa_identik_dengan_label_akhir_error(self):
+        """label_alt_sisa identik dengan label_akhir pada adjudikasi ditolak sebagai error."""
+        from build_ground_truth import build_ground_truth
+        seg_map = {
+            "TEST_S01": {"id_segmen": "TEST_S01", "id_abstrak": "TEST_A01", "urutan": "1", "teks_segmen": "T1", "status_beku": "disetujui"}
+        }
+        ann1 = {"TEST_S01": {"id_segmen": "TEST_S01", "id_abstrak": "TEST_A01", "label": "TJ", "flag": "B1", "alasan": "ambigu", "simpul_penentu": "", "versi_pedoman": "v1.0"}}
+        adj = {
+            "TEST_S01": {"id_segmen": "TEST_S01", "id_abstrak": "TEST_A01", "label_akhir": "TJ", "label_alt_sisa": "TJ", "status_akhir": "batas-sisa", "adjudikator_id": "adj1", "alasan": "tes"}
+        }
+        gt_rows, stats = build_ground_truth(seg_map, ann1, None, adj)
+        self.assertEqual(gt_rows[0]["status_akhir"], "belum-selesai")
+        self.assertIn("identik", gt_rows[0]["catatan_gt"])
+
 
 # ===========================================================================
 # 17. TestKelengkapanStatusAndLabelValidation
@@ -1543,6 +1674,104 @@ class TestConvertLabelStudioAnotatorPriorityAndErrors(unittest.TestCase):
         self.assertEqual(len(anotasi_rows), 0)
         self.assertEqual(audit_rows[0]["konversi_status"], "error")
 
+    def test_uji_pemecahan_kosong_konversi_gagal(self):
+        """uji_pemecahan kosong -> task ditolak, konversi_status='error'."""
+        from convert_labelstudio_export import convert_task
+        task = {
+            "id": 103,
+            "data": {"id_abstrak": "TEST_A01", "id_segmen": "TEST_S01"},
+            "annotations": [{
+                "result": [
+                    {"from_name": "uji_pemecahan", "value": {"choices": []}},
+                    {"from_name": "label_1", "value": {"choices": ["TJ"]}},
+                ]
+            }]
+        }
+        anotasi_rows, audit_rows = convert_task(task, default_anotator_id="an1")
+        self.assertEqual(len(anotasi_rows), 0)
+        self.assertEqual(audit_rows[0]["konversi_status"], "error")
+        self.assertIn("kosong", audit_rows[0]["konversi_catatan"])
+
+    def test_uji_pemecahan_tidak_dikenal_konversi_gagal(self):
+        """uji_pemecahan bukan 'Ya'/'Tidak' -> task ditolak, konversi_status='error'."""
+        from convert_labelstudio_export import convert_task
+        task = {
+            "id": 104,
+            "data": {"id_abstrak": "TEST_A01", "id_segmen": "TEST_S01"},
+            "annotations": [{
+                "result": [
+                    {"from_name": "uji_pemecahan", "value": {"choices": ["Mungkin"]}},
+                    {"from_name": "label_1", "value": {"choices": ["TJ"]}},
+                ]
+            }]
+        }
+        anotasi_rows, audit_rows = convert_task(task, default_anotator_id="an1")
+        self.assertEqual(len(anotasi_rows), 0)
+        self.assertEqual(audit_rows[0]["konversi_status"], "error")
+        self.assertIn("tidak dikenal", audit_rows[0]["konversi_catatan"])
+
+    def test_up_ya_pemicu_kosong_konversi_gagal(self):
+        """UP='Ya' tanpa pemicu_up -> task ditolak, konversi_status='error'."""
+        from convert_labelstudio_export import convert_task
+        task = {
+            "id": 105,
+            "data": {"id_abstrak": "TEST_A01", "id_segmen": "TEST_S01"},
+            "annotations": [{
+                "result": [
+                    {"from_name": "uji_pemecahan", "value": {"choices": ["Ya"]}},
+                    {"from_name": "pemicu_up", "value": {"choices": []}},
+                    {"from_name": "label_1", "value": {"choices": ["TJ"]}},
+                    {"from_name": "label_2", "value": {"choices": ["MT"]}},
+                ]
+            }]
+        }
+        anotasi_rows, audit_rows = convert_task(task, default_anotator_id="an1")
+        self.assertEqual(len(anotasi_rows), 0)
+        self.assertEqual(audit_rows[0]["konversi_status"], "error")
+        self.assertIn("pemicu_up kosong", audit_rows[0]["konversi_catatan"])
+
+    def test_up_ya_pemicu_tidak_valid_konversi_gagal(self):
+        """UP='Ya' dengan pemicu tidak valid (bukan U1-U5) -> task ditolak, konversi_status='error'."""
+        from convert_labelstudio_export import convert_task
+        task = {
+            "id": 106,
+            "data": {"id_abstrak": "TEST_A01", "id_segmen": "TEST_S01"},
+            "annotations": [{
+                "result": [
+                    {"from_name": "uji_pemecahan", "value": {"choices": ["Ya"]}},
+                    {"from_name": "pemicu_up", "value": {"choices": ["U9"]}},
+                    {"from_name": "label_1", "value": {"choices": ["TJ"]}},
+                    {"from_name": "label_2", "value": {"choices": ["MT"]}},
+                ]
+            }]
+        }
+        anotasi_rows, audit_rows = convert_task(task, default_anotator_id="an1")
+        self.assertEqual(len(anotasi_rows), 0)
+        self.assertEqual(audit_rows[0]["konversi_status"], "error")
+        self.assertIn("pemicu_up mengandung nilai tidak valid", audit_rows[0]["konversi_catatan"])
+
+    def test_up_ya_pemicu_valid_dicatat_di_audit(self):
+        """UP='Ya' dengan pemicu sah U1-U5 -> konversi sukses dan pemicu_up tercatat di audit_rows."""
+        from convert_labelstudio_export import convert_task
+        task = {
+            "id": 107,
+            "data": {"id_abstrak": "TEST_A01", "id_segmen": "TEST_S01"},
+            "annotations": [{
+                "result": [
+                    {"from_name": "uji_pemecahan", "value": {"choices": ["Ya"]}},
+                    {"from_name": "pemicu_up", "value": {"choices": ["U1", "U2"]}},
+                    {"from_name": "label_1", "value": {"choices": ["TJ"]}},
+                    {"from_name": "label_2", "value": {"choices": ["MT"]}},
+                ]
+            }]
+        }
+        anotasi_rows, audit_rows = convert_task(task, default_anotator_id="an1")
+        self.assertEqual(len(anotasi_rows), 1)
+        self.assertEqual(anotasi_rows[0]["label"], "TJ+MT")
+        self.assertEqual(audit_rows[0]["konversi_status"], "ok")
+        self.assertEqual(audit_rows[0]["pemicu_up"], "U1;U2")
+        self.assertIn("U1", anotasi_rows[0]["simpul_penentu"])
+
 
 # ===========================================================================
 # 19. TestValidateAnnotationsHardening
@@ -1654,6 +1883,55 @@ class TestValidateAnnotationsHardening(unittest.TestCase):
         self.assertEqual(res.returncode, 0, "Harus exit code 0 jika tidak ada ERROR")
         self.assertTrue((out_dir / "laporan_validasi_ringkasan.txt").exists())
         self.assertTrue((out_dir / "laporan_validasi.csv").exists())
+
+    def test_label_alt_identik_dengan_label_utama_error(self):
+        """label_alt identik dengan label utama harus menghasilkan Rule 9 ERROR pada validasi anotasi."""
+        from validate_annotations import validate
+        seg_path = self.tmp / "segmen.csv"
+        abs_path = self.tmp / "abstrak.csv"
+        an_path = self.tmp / "anotasi_alt_dup.csv"
+        self._write_csv(abs_path, ["id_abstrak", "kunci_artikel"], [{"id_abstrak": "TEST_A01", "kunci_artikel": "k1"}])
+        self._write_csv(seg_path, ["id_segmen", "id_abstrak", "status_beku"], [{"id_segmen": "S01", "id_abstrak": "TEST_A01", "status_beku": "disetujui"}])
+        self._write_csv(an_path,
+            ["id_abstrak", "id_segmen", "anotator_id", "label", "label_alt", "flag", "alasan", "simpul_penentu", "versi_pedoman"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "S01", "anotator_id": "an1", "label": "TJ", "label_alt": "TJ", "flag": "B1", "alasan": "ambigu", "simpul_penentu": "TJ-1", "versi_pedoman": "v1.0"}]
+        )
+        issues = validate([an_path], seg_path, abs_path, None)
+        rule_9_errors = [i for i in issues if i.rule_no == 9 and i.severity == "ERROR"]
+        self.assertTrue(len(rule_9_errors) > 0)
+        self.assertTrue(any("identik" in i.pesan.lower() for i in rule_9_errors))
+
+    def test_label_alt_subset_multi_label_dengan_flag_b4_sah(self):
+        """label_alt subset parsial dari multi-label dengan flag B4 sah tanpa issue Rule 9."""
+        from validate_annotations import validate
+        seg_path = self.tmp / "segmen.csv"
+        abs_path = self.tmp / "abstrak.csv"
+        an_path = self.tmp / "anotasi_alt_b4.csv"
+        self._write_csv(abs_path, ["id_abstrak", "kunci_artikel"], [{"id_abstrak": "TEST_A01", "kunci_artikel": "k1"}])
+        self._write_csv(seg_path, ["id_segmen", "id_abstrak", "status_beku"], [{"id_segmen": "S01", "id_abstrak": "TEST_A01", "status_beku": "disetujui"}])
+        self._write_csv(an_path,
+            ["id_abstrak", "id_segmen", "anotator_id", "label", "label_alt", "flag", "alasan", "simpul_penentu", "versi_pedoman"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "S01", "anotator_id": "an1", "label": "TJ+MT", "label_alt": "MT", "flag": "B4", "alasan": "variasi tulis ulang", "simpul_penentu": "U1; TJ-1; MT-1", "versi_pedoman": "v1.0"}]
+        )
+        issues = validate([an_path], seg_path, abs_path, None)
+        rule_9_issues = [i for i in issues if i.rule_no == 9]
+        self.assertEqual(len(rule_9_issues), 0)
+
+    def test_label_alt_subset_multi_label_tanpa_flag_b4_warning(self):
+        """label_alt subset parsial dari multi-label tanpa flag B4 menghasilkan Rule 9 WARNING."""
+        from validate_annotations import validate
+        seg_path = self.tmp / "segmen.csv"
+        abs_path = self.tmp / "abstrak.csv"
+        an_path = self.tmp / "anotasi_alt_no_b4.csv"
+        self._write_csv(abs_path, ["id_abstrak", "kunci_artikel"], [{"id_abstrak": "TEST_A01", "kunci_artikel": "k1"}])
+        self._write_csv(seg_path, ["id_segmen", "id_abstrak", "status_beku"], [{"id_segmen": "S01", "id_abstrak": "TEST_A01", "status_beku": "disetujui"}])
+        self._write_csv(an_path,
+            ["id_abstrak", "id_segmen", "anotator_id", "label", "label_alt", "flag", "alasan", "simpul_penentu", "versi_pedoman"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "S01", "anotator_id": "an1", "label": "TJ+MT", "label_alt": "MT", "flag": "B1", "alasan": "ragu", "simpul_penentu": "U1; TJ-1", "versi_pedoman": "v1.0"}]
+        )
+        issues = validate([an_path], seg_path, abs_path, None)
+        rule_9_warnings = [i for i in issues if i.rule_no == 9 and i.severity == "WARNING"]
+        self.assertTrue(len(rule_9_warnings) > 0)
 
 
 # ===========================================================================
@@ -1923,6 +2201,48 @@ class TestPrepareLabelStudioTasks(unittest.TestCase):
         self.assertEqual(sorted(seg_ids_2), sorted(expected_seg_ids))
         self.assertEqual(len(seg_ids_1), len(set(seg_ids_1)), "Setiap segmen harus muncul tepat 1 kali")
         self.assertEqual(len(seg_ids_2), len(set(seg_ids_2)), "Setiap segmen harus muncul tepat 1 kali")
+
+    def test_prepare_tasks_id_segmen_kosong_fatal(self):
+        """Baris dengan id_segmen kosong di segmen.csv menghentikan pembuatan task dengan exit code nonzero."""
+        import subprocess
+        abs_path = self.tmp / "abstrak.csv"
+        seg_path = self.tmp / "segmen_empty_sid.csv"
+        out_dir = self.tmp / "out_empty_sid"
+
+        self._write_csv(abs_path,
+            ["id_abstrak", "judul", "jurnal", "tahun", "jenis_studi", "peran_data", "teks_kerja"],
+            [{"id_abstrak": "TEST_A01", "judul": "J1", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "korpus-anotasi", "teks_kerja": "Teks"}]
+        )
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [
+                {"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S01", "urutan": "1", "teks_segmen": "Teks 1.", "status_beku": "disetujui"},
+                {"id_abstrak": "TEST_A01", "id_segmen": "", "urutan": "2", "teks_segmen": "Teks 2.", "status_beku": "disetujui"},
+            ]
+        )
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "prepare_labelstudio_tasks.py"),
+             "--abstrak", str(abs_path), "--segmen", str(seg_path),
+             "--peran-data", "korpus-anotasi",
+             "--anotator-ids", "an1,an2",
+             "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertNotEqual(res.returncode, 0, "Harus gagal jika ada baris dengan id_segmen kosong")
+        output = res.stderr + res.stdout
+        self.assertIn("FATAL", output)
+        self.assertIn("KOSONG", output)
+
+    def test_load_segmen_id_segmen_kosong_exit_nonzero(self):
+        """Fungsi load_segmen() langsung memblokir id_segmen kosong dan exit nonzero."""
+        from prepare_labelstudio_tasks import load_segmen
+        seg_path = self.tmp / "segmen_empty_fn.csv"
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [{"id_abstrak": "TEST_A99", "id_segmen": "", "urutan": "1", "teks_segmen": "Teks.", "status_beku": "disetujui"}]
+        )
+        with self.assertRaises(SystemExit):
+            load_segmen(seg_path)
 
 
 # ===========================================================================

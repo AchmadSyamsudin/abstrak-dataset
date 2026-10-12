@@ -39,6 +39,8 @@ logger = logging.getLogger("convert_labelstudio_export")
 
 VALID_LABELS = {"LB", "TJ", "MT", "HS", "SI", "LAINNYA", "TT"}
 VALID_FLAGS = {"B1", "B2", "B3", "B4", "B5", "B6"}
+VALID_UJI_PEMECAHAN = {"Ya", "Tidak"}
+VALID_PEMICU_UP = {"U1", "U2", "U3", "U4", "U5"}
 
 ANOTASI_COLS = [
     "id_abstrak", "id_segmen", "anotator_id", "label", "label_alt",
@@ -49,7 +51,7 @@ ANOTASI_COLS = [
 
 AUDIT_COLS = [
     "task_id", "id_segmen", "anotator_id",
-    "uji_pemecahan", "label_1_raw", "label_2_raw", "label_3_raw",
+    "uji_pemecahan", "pemicu_up", "label_1_raw", "label_2_raw", "label_3_raw",
     "label_4_raw", "label_5_raw", "label_6_raw",
     "konversi_status", "konversi_catatan",
 ]
@@ -97,14 +99,59 @@ def build_label_string(
     task_id: Any,
 ) -> tuple[str, List[str], str]:
     """
-    Susun string label final dari uji_pemecahan dan label_1..6.
+    Susun string label final dari uji_pemecahan, pemicu_up, dan label_1..6.
 
     Return: (label_str, audit_notes, konversi_status)
     konversi_status: "ok" | "error"
     """
     audit_notes: List[str] = []
-    up = _get_choices(results, "uji_pemecahan")
-    up_ya = "Ya" in up
+    up_choices = _get_choices(results, "uji_pemecahan")
+    up_val = up_choices[0] if up_choices else ""
+
+    # VALIDASI: uji_pemecahan hanya boleh 'Ya' atau 'Tidak'
+    if not up_val:
+        msg = (
+            f"ERROR KONVERSI [{id_segmen}/task {task_id}]: "
+            "uji_pemecahan kosong. Uji Pemecahan wajib diisi ('Ya' atau 'Tidak')."
+        )
+        logger.error(msg)
+        audit_notes.append(msg)
+        return "", audit_notes, "error"
+
+    if up_val not in VALID_UJI_PEMECAHAN:
+        msg = (
+            f"ERROR KONVERSI [{id_segmen}/task {task_id}]: "
+            f"uji_pemecahan bernilai '{up_val}' tidak dikenal (hanya menerima 'Ya' atau 'Tidak')."
+        )
+        logger.error(msg)
+        audit_notes.append(msg)
+        return "", audit_notes, "error"
+
+    up_ya = (up_val == "Ya")
+
+    # VALIDASI PEMICU_UP: jika UP = 'Ya', pemicu U1-U5 wajib dan valid
+    if up_ya:
+        pemicu_list = _get_choices(results, "pemicu_up")
+        if not pemicu_list:
+            msg = (
+                f"ERROR KONVERSI [{id_segmen}/task {task_id}]: "
+                "uji_pemecahan='Ya' tetapi pemicu_up kosong. "
+                f"Pemicu UP wajib dipilih dari daftar tertutup: {sorted(VALID_PEMICU_UP)}."
+            )
+            logger.error(msg)
+            audit_notes.append(msg)
+            return "", audit_notes, "error"
+
+        invalid_pemicu = [p for p in pemicu_list if p not in VALID_PEMICU_UP]
+        if invalid_pemicu:
+            msg = (
+                f"ERROR KONVERSI [{id_segmen}/task {task_id}]: "
+                f"pemicu_up mengandung nilai tidak valid: {invalid_pemicu} "
+                f"(diperbolehkan: {sorted(VALID_PEMICU_UP)})."
+            )
+            logger.error(msg)
+            audit_notes.append(msg)
+            return "", audit_notes, "error"
 
     label_1_list = _get_choices(results, "label_1")
     label_1 = label_1_list[0] if label_1_list else ""
@@ -176,6 +223,7 @@ def validate_label_alt(
     label_final: str,
     id_segmen: str,
     task_id: Any,
+    flags: Optional[List[str]] = None,
 ) -> tuple[str, str, str]:
     """
     Validasi label_alt. Return (label_alt_str, catatan, status).
@@ -206,17 +254,38 @@ def validate_label_alt(
         logger.error(msg)
         return "", msg, "error"
 
-    # Periksa label alt tidak sama dengan label final
+    # Evaluasi tumpang tindih dengan label final
+    # Sesuai Pedoman v1.0:
+    # 1. label_alt yang identik 100% dengan label utama adalah ERROR (tidak memberikan pembacaan alternatif).
+    # 2. label_alt yang merupakan subset parsial dari multi-label (misal TJ+MT dengan alt MT):
+    #    - Jika disertai flag B4: SAH (Pedoman Bagian 4 Langkah 0b: label utama inklusif, hasil tulis ulang lain sebagai alternatif).
+    #    - Jika tanpa flag B4: PERINGATAN (WARNING) untuk audit anotasi.
     final_parts = {l.strip() for l in label_final.split("+") if l.strip()}
-    overlap = [p for p in parts if p in final_parts]
-    if overlap:
-        msg = (
-            f"PERINGATAN [{id_segmen}/task {task_id}]: "
-            f"label_alt {parts} bertumpang tindih dengan label final '{label_final}'. "
-            "Pedoman mensyaratkan alternatif berbeda dari label ganda."
-        )
-        logger.warning(msg)
-        # Ini WARNING, bukan ERROR — konversi tetap jalan
+    flags_set = set(flags or [])
+
+    for p in parts:
+        if p == label_final:
+            msg = (
+                f"ERROR KONVERSI [{id_segmen}/task {task_id}]: "
+                f"label_alt '{p}' identik dengan label utama '{label_final}'. "
+                "Label alternatif harus memberikan pembacaan berbeda dari label utama."
+            )
+            logger.error(msg)
+            return "", msg, "error"
+        elif p in final_parts:
+            if "B4" in flags_set:
+                logger.info(
+                    f"[{id_segmen}/task {task_id}]: label_alt '{p}' bertumpang tindih dengan multi-label '{label_final}' "
+                    "diizinkan karena flag B4 (penulisan ulang alternatif sesuai Pedoman v1.0 Bagian 4)."
+                )
+            else:
+                msg = (
+                    f"PERINGATAN [{id_segmen}/task {task_id}]: "
+                    f"label_alt '{p}' bertumpang tindih dengan salah satu label ganda '{label_final}' tanpa flag B4. "
+                    "Pedoman mensyaratkan alternatif berbeda dari label ganda kecuali variasi penulisan ulang B4."
+                )
+                logger.warning(msg)
+                # WARNING: konversi tetap berjalan
 
     return ";".join(parts), "", "ok"
 
@@ -253,6 +322,7 @@ def convert_task(
             "id_segmen": id_segmen,
             "anotator_id": default_anotator_id or "",
             "uji_pemecahan": "",
+            "pemicu_up": "",
             "label_1_raw": "", "label_2_raw": "", "label_3_raw": "",
             "label_4_raw": "", "label_5_raw": "", "label_6_raw": "",
             "konversi_status": "belum-dianotasi",
@@ -291,6 +361,10 @@ def convert_task(
         up_raw = _get_choices(results, "uji_pemecahan")
         up_val = up_raw[0] if up_raw else ""
 
+        # Pemicu UP untuk audit
+        pemicu_raw = _get_choices(results, "pemicu_up")
+        pemicu_val = ";".join(sorted(pemicu_raw)) if pemicu_raw else ""
+
         # Label per field untuk audit
         audit_label_fields = {}
         for i in range(1, 7):
@@ -307,12 +381,19 @@ def convert_task(
         # Label alt
         label_alt_raw = _get_text(results, "label_alt")
         label_alt, alt_note, alt_status = validate_label_alt(
-            label_alt_raw, label, id_segmen, task_id
+            label_alt_raw, label, id_segmen, task_id, flags=flag_list
         )
 
         # Simpul penentu dan alasan
         simpul_penentu = _get_text(results, "simpul_penentu")
         alasan = _get_text(results, "alasan")
+
+        # Jika pemicu UP terisi pada UP=Ya, pastikan tercermin pada simpul_penentu jika belum ada
+        if pemicu_val and up_val == "Ya":
+            if not simpul_penentu:
+                simpul_penentu = pemicu_val
+            elif not any(u in simpul_penentu.upper() for u in pemicu_raw):
+                simpul_penentu = f"{pemicu_val}; {simpul_penentu}"
 
         # Gabungkan status
         all_notes = label_notes + ([alt_note] if alt_note else [])
@@ -324,6 +405,7 @@ def convert_task(
             "id_segmen": id_segmen,
             "anotator_id": anotator_id,
             "uji_pemecahan": up_val,
+            "pemicu_up": pemicu_val,
             **audit_label_fields,
             "konversi_status": final_status,
             "konversi_catatan": " | ".join(all_notes),
