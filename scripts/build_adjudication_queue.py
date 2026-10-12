@@ -35,6 +35,7 @@ Penggunaan:
 import argparse
 import csv
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -105,7 +106,11 @@ def determine_queue_reasons(
     label2 = ann2.get("label", "")
     flag2 = ann2.get("flag", "")
 
-    # Aturan 1: label berbeda
+    # Aturan 1: label kosong atau berbeda
+    if not label1.strip():
+        reasons.append("label-kosong-an1")
+    if not label2.strip():
+        reasons.append("label-kosong-an2")
     set1 = parse_label_set(label1)
     set2 = parse_label_set(label2)
     if set1 != set2:
@@ -225,7 +230,7 @@ def main() -> None:
             f"File output sudah ada: {output_path}. "
             "Gunakan --tambah-ke untuk menggabungkan, atau hapus file lama terlebih dahulu."
         )
-        return
+        sys.exit(1)
 
     new_queue = build_queue(anotasi1, anotasi2, existing_ids)
 

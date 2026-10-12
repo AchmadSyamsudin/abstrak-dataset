@@ -67,6 +67,7 @@ logging.basicConfig(
 logger = logging.getLogger("calculate_completeness")
 
 KOMPONEN: List[str] = ["LB", "TJ", "MT", "HS", "SI"]
+VALID_LABELS_SEMUA: Set[str] = {"LB", "TJ", "MT", "HS", "SI", "LAINNYA", "TT"}
 
 # Status segmen yang valid dari ground_truth.csv
 VALID_STATUS_GT: Set[str] = {"final", "batas-sisa", "dikecualikan", "belum-selesai"}
@@ -295,18 +296,72 @@ def compute_completeness(
         comp = results[id_abstrak]
         blk = blocked[id_abstrak]
 
-        # 1. HARD STOP: Segmen belum-selesai
-        if status == "belum-selesai" or (status and status not in VALID_STATUS_GT):
+        # 1. HARD STOP: status_akhir kosong atau tidak dikenal
+        if not status:
             comp.has_pending_segments = True
-            msg = f"{id_segmen}: status='{status}' (belum-selesai)."
+            msg = f"{id_segmen}: status_akhir KOSONG. Baris tidak dapat diproses."
+            comp.catatan.append(msg)
+            if blk["status_blokir"] not in ("BLOKIR-TT",):
+                blk["status_blokir"] = "BLOKIR-INVALID"
+            blk["catatan"].append(msg)
+            continue
+
+        if status not in VALID_STATUS_GT:
+            comp.has_pending_segments = True
+            msg = (
+                f"{id_segmen}: status_akhir='{status}' tidak dikenal "
+                f"(valid: {sorted(VALID_STATUS_GT)}). Baris tidak dapat diproses."
+            )
+            comp.catatan.append(msg)
+            if blk["status_blokir"] not in ("BLOKIR-TT",):
+                blk["status_blokir"] = "BLOKIR-INVALID"
+            blk["catatan"].append(msg)
+            continue
+
+        # 2. HARD STOP: Segmen belum-selesai
+        if status == "belum-selesai":
+            comp.has_pending_segments = True
+            msg = f"{id_segmen}: status='belum-selesai'."
             comp.catatan.append(msg)
             if blk["status_blokir"] not in ("BLOKIR-TT",):
                 blk["status_blokir"] = "BLOKIR-BELUMSELESAI"
             blk["catatan"].append(msg)
             continue
 
-        # 2. HARD STOP: TT belum diselesaikan di label_akhir
+        # 3. Validasi label_akhir - kode tidak valid diblokir (tidak silent-ignore)
         label_set = parse_labels(label_akhir_raw)
+        if label_akhir_raw and label_set:
+            invalid_labels = label_set - VALID_LABELS_SEMUA
+            if invalid_labels:
+                comp.has_pending_segments = True
+                msg = (
+                    f"{id_segmen}: label_akhir mengandung kode tidak valid: "
+                    f"{sorted(invalid_labels)}. Abstrak diblokir."
+                )
+                comp.catatan.append(msg)
+                if blk["status_blokir"] not in ("BLOKIR-TT",):
+                    blk["status_blokir"] = "BLOKIR-INVALID"
+                blk["catatan"].append(msg)
+                continue
+
+        # 4. Validasi label_alt_sisa - kode tidak valid diblokir
+        if label_alt_raw:
+            alt_parts = {l.strip() for part in label_alt_raw.split(";")
+                         for l in part.split("+") if l.strip()}
+            invalid_alt = alt_parts - VALID_LABELS_SEMUA
+            if invalid_alt:
+                comp.has_pending_segments = True
+                msg = (
+                    f"{id_segmen}: label_alt_sisa mengandung kode tidak valid: "
+                    f"{sorted(invalid_alt)}. Abstrak diblokir."
+                )
+                comp.catatan.append(msg)
+                if blk["status_blokir"] not in ("BLOKIR-TT",):
+                    blk["status_blokir"] = "BLOKIR-INVALID"
+                blk["catatan"].append(msg)
+                continue
+
+        # 5. HARD STOP: TT belum diselesaikan di label_akhir
         if "TT" in label_set:
             comp.has_unresolved_tt = True
             msg = (
@@ -314,24 +369,25 @@ def compute_completeness(
                 "TT harus diselesaikan melalui adjudikasi (Pedoman K3)."
             )
             comp.catatan.append(msg)
-            blk["status_blokir"] = "BLOKIR-TT"  # TT menang atas belum-selesai
+            blk["status_blokir"] = "BLOKIR-TT"  # TT menang atas semua blokir lain
             blk["catatan"].append(msg)
             continue
 
-        # 3. Dikecualikan: tidak menyumbang v utama (K3), tetapi menyumbang v-min/v-maks (K5)
+        # 6. Dikecualikan: tidak menyumbang v utama (K3), tetapi menyumbang v-min/v-maks (K5)
         if status == "dikecualikan":
             comp.catatan.append(f"{id_segmen}: dikecualikan (K3).")
             readings = get_segment_readings("", label_alt_raw, "dikecualikan")
             comp.update_from_segment(readings, "dikecualikan")
             continue
 
-        # 4. LAINNYA / label kosong: tidak menyumbang apapun
+        # 7. LAINNYA / label kosong: tidak menyumbang apapun
         if label_set == {"LAINNYA"} or not label_set:
             comp.catatan.append(f"{id_segmen}: LAINNYA/kosong, tidak menyumbang.")
             continue
 
-        # 5. Normal (final atau batas-sisa): update v, v-min, v-maks
+        # 8. Normal (final atau batas-sisa): update v, v-min, v-maks
         readings = get_segment_readings(label_akhir_raw, label_alt_raw, status)
+
         comp.update_from_segment(readings, status)
 
     return results, blocked
@@ -387,7 +443,7 @@ def main() -> None:
     gt_path = Path(args.ground_truth)
     if not gt_path.exists():
         logger.error(f"File ground truth tidak ditemukan: {gt_path}")
-        return
+        sys.exit(1)
 
     gt_rows = load_csv(gt_path)
 
@@ -411,7 +467,7 @@ def main() -> None:
 
     if not completeness:
         logger.error("Tidak ada data kelengkapan yang dapat dihitung.")
-        return
+        sys.exit(1)
 
     output_rows: List[Dict] = []
     error_rows: List[Dict] = []
@@ -420,9 +476,10 @@ def main() -> None:
     n_tak_pasti = 0
     n_blokir_tt = 0
     n_blokir_pending = 0
+    n_blokir_invalid = 0
     jenis_studi_stats: Dict[str, Dict[str, int]] = defaultdict(
         lambda: {"LENGKAP": 0, "TIDAK LENGKAP": 0, "TAK PASTI": 0,
-                 "BLOKIR-TT": 0, "BLOKIR-BELUMSELESAI": 0}
+                 "BLOKIR-TT": 0, "BLOKIR-BELUMSELESAI": 0, "BLOKIR-INVALID": 0}
     )
 
     for id_abstrak in sorted(completeness.keys()):
@@ -448,6 +505,22 @@ def main() -> None:
             })
             logger.error(
                 f"BLOKIR-TT: {id_abstrak} — label_akhir masih TT. "
+                "Tidak masuk metrik kelengkapan."
+            )
+            continue
+
+        if status_blokir == "BLOKIR-INVALID":
+            n_blokir_invalid += 1
+            jenis_studi_stats[jenis_studi]["BLOKIR-INVALID"] += 1
+            error_rows.append({
+                "id_abstrak": id_abstrak,
+                "jenis_studi": jenis_studi,
+                "peran_data": peran_data,
+                "status_blokir": "BLOKIR-INVALID",
+                "catatan": "; ".join(blk.get("catatan", [])),
+            })
+            logger.error(
+                f"BLOKIR-INVALID: {id_abstrak} — data GT tidak valid (status kosong/tidak dikenal atau kode label tidak valid). "
                 "Tidak masuk metrik kelengkapan."
             )
             continue

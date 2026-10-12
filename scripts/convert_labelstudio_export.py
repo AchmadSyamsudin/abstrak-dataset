@@ -26,6 +26,7 @@ import argparse
 import csv
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -115,6 +116,37 @@ def build_label_string(
             val = chosen[0]
             if val and val != "(kosong)":
                 extra_labels.append(val)
+
+    # VALIDASI: label_1 tidak boleh kosong
+    if not label_1 or label_1 == "(kosong)":
+        msg = (
+            f"ERROR KONVERSI [{id_segmen}/task {task_id}]: "
+            "label_1 kosong. Setiap segmen harus memiliki minimal satu label."
+        )
+        logger.error(msg)
+        audit_notes.append(msg)
+        return "", audit_notes, "error"
+
+    # VALIDASI: label_1 harus kode valid
+    if label_1 not in VALID_LABELS:
+        msg = (
+            f"ERROR KONVERSI [{id_segmen}/task {task_id}]: "
+            f"label_1 '{label_1}' tidak valid (diperbolehkan: {sorted(VALID_LABELS)})."
+        )
+        logger.error(msg)
+        audit_notes.append(msg)
+        return "", audit_notes, "error"
+
+    # VALIDASI: semua extra_labels harus valid
+    for lbl in extra_labels:
+        if lbl not in VALID_LABELS:
+            msg = (
+                f"ERROR KONVERSI [{id_segmen}/task {task_id}]: "
+                f"label tambahan '{lbl}' tidak valid (diperbolehkan: {sorted(VALID_LABELS)})."
+            )
+            logger.error(msg)
+            audit_notes.append(msg)
+            return "", audit_notes, "error"
 
     # VALIDASI: UP=Tidak tapi ada label tambahan terisi
     if not up_ya and extra_labels:
@@ -211,8 +243,21 @@ def convert_task(
 
     annotations = task.get("annotations", [])
     if not annotations:
-        logger.warning(f"Task {id_segmen} (id={task_id}): tidak ada anotasi, dilewati.")
-        return [], []
+        logger.warning(
+            f"Task {id_segmen} (id={task_id}): tidak ada anotasi. "
+            "Task ini belum dianotasi dan tidak masuk anotasi.csv."
+        )
+        # Kembalikan audit baris kosong agar terdeteksi sebagai 'belum-dianotasi'
+        return [], [{
+            "task_id": task_id,
+            "id_segmen": id_segmen,
+            "anotator_id": default_anotator_id or "",
+            "uji_pemecahan": "",
+            "label_1_raw": "", "label_2_raw": "", "label_3_raw": "",
+            "label_4_raw": "", "label_5_raw": "", "label_6_raw": "",
+            "konversi_status": "belum-dianotasi",
+            "konversi_catatan": "Task belum memiliki anotasi.",
+        }]
 
     anotasi_rows: List[Dict] = []
     audit_rows: List[Dict] = []
@@ -223,11 +268,23 @@ def convert_task(
 
         anotator_from_form = _get_text(results, "anotator_id").strip()
         anotator_from_data = data.get("_anotator_id", "")
-        anotator_id = anotator_from_form or anotator_from_data or default_anotator_id or ""
+        # --anotator-id CLI arg SELALU didahulukan atas form field atau metadata task.
+        # Anotator tidak boleh mengubah ID mereka sendiri dengan mengetik di form.
+        if default_anotator_id:
+            anotator_id = default_anotator_id
+            if anotator_from_form and anotator_from_form != default_anotator_id:
+                logger.warning(
+                    f"Task {id_segmen} (id={task_id}): anotator_id dari form "
+                    f"'{anotator_from_form}' DIABAIKAN — "
+                    f"--anotator-id '{default_anotator_id}' digunakan."
+                )
+        else:
+            anotator_id = anotator_from_form or anotator_from_data or ""
 
         if not anotator_id:
             logger.warning(
-                f"Task {id_segmen} (id={task_id}): anotator_id tidak ditemukan."
+                f"Task {id_segmen} (id={task_id}): anotator_id tidak ditemukan. "
+                "Gunakan --anotator-id untuk menetapkan ID anotator secara eksplisit."
             )
 
         # UP raw untuk audit
@@ -324,7 +381,7 @@ def main() -> None:
 
     if not input_path.exists():
         logger.error(f"File input tidak ditemukan: {input_path}")
-        return
+        sys.exit(1)
 
     if output_path.exists():
         logger.error(
@@ -332,7 +389,7 @@ def main() -> None:
             "Ganti nama atau hapus file lama terlebih dahulu. "
             "Skrip ini tidak menimpa anotasi yang sudah ada."
         )
-        return
+        sys.exit(1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -343,24 +400,25 @@ def main() -> None:
         tasks = [tasks]
     elif not isinstance(tasks, list):
         logger.error("Format JSON tidak dikenali.")
-        return
+        sys.exit(1)
 
     all_anotasi: List[Dict] = []
     all_audit: List[Dict] = []
     n_error = 0
-    n_skip = 0
+    n_belum_dianotasi = 0
 
     for task in tasks:
         anotasi_rows, audit_rows = convert_task(task, default_anotator_id=args.anotator_id)
         all_anotasi.extend(anotasi_rows)
         all_audit.extend(audit_rows)
-        if not anotasi_rows and not audit_rows:
-            n_skip += 1
+        n_belum_dianotasi += sum(
+            1 for a in audit_rows if a.get("konversi_status") == "belum-dianotasi"
+        )
         n_error += sum(1 for a in audit_rows if a["konversi_status"] == "error")
 
-    if not all_anotasi and n_error == 0:
+    if not all_anotasi and n_error == 0 and n_belum_dianotasi == 0:
         logger.error("Tidak ada anotasi yang berhasil dikonversi.")
-        return
+        sys.exit(1)
 
     # Tulis anotasi.csv
     with open(output_path, "w", encoding="utf-8", newline="") as f:
@@ -384,13 +442,26 @@ def main() -> None:
     )
     logger.info(f"audit_konversi ditulis: {audit_path} ({len(all_audit)} baris)")
 
+    has_failure = False
+
     if n_error > 0:
         logger.error(
             f"{n_error} task memiliki error konversi dan TIDAK masuk anotasi.csv. "
-            f"Periksa {audit_path} untuk detail, perbaiki di Label Studio, lalu ekspor ulang."
+            f"Periksa {audit_path} untuk detail, perbaiki di Label Studio, lalu ekspor ulang. "
+            "File anotasi.csv yang dihasilkan TIDAK LENGKAP."
         )
-    if n_skip > 0:
-        logger.warning(f"{n_skip} task tidak memiliki anotasi, dilewati.")
+        has_failure = True
+
+    if n_belum_dianotasi > 0:
+        logger.error(
+            f"{n_belum_dianotasi} task belum dianotasi sama sekali. "
+            "Selesaikan anotasi di Label Studio dan ekspor ulang. "
+            "File anotasi.csv yang dihasilkan TIDAK LENGKAP."
+        )
+        has_failure = True
+
+    if has_failure:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

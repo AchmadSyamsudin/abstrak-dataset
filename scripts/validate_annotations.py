@@ -222,7 +222,14 @@ def validate(
         flags = [f.strip() for f in flag_raw.split(";") if f.strip()]
         label_alts = [la.strip() for la in label_alt_raw.split(";") if la.strip()]
 
-        # Aturan 5: kode label valid
+        # Aturan 5: kode label valid dan tidak boleh kosong
+        if not labels:
+            issues.append(ValidationIssue(
+                rule_no=5,
+                id_abstrak=id_abs, id_segmen=id_seg, anotator_id=anotator,
+                pesan="Label kosong. Setiap segmen harus diberi minimal satu label yang valid.",
+                severity="ERROR",
+            ))
         for lbl in labels:
             if lbl not in VALID_LABELS:
                 issues.append(ValidationIssue(
@@ -341,13 +348,14 @@ def validate(
                 severity="ERROR",
             ))
 
-    # --- Aturan 14: adjudikasi tidak ada dua keputusan final untuk segmen yang sama ---
+    # --- Aturan 14: adjudikasi tidak boleh memiliki keputusan ganda untuk segmen yang sama ---
     if adjudikasi_rows:
-        final_segmen: Dict[str, int] = defaultdict(int)
+        segmen_adj_counts: Dict[str, int] = defaultdict(int)
         for row in adjudikasi_rows:
-            if row.get("status_akhir", "").strip() == "final":
-                final_segmen[row.get("id_segmen", "")] += 1
-        for id_seg, count in final_segmen.items():
+            sid = row.get("id_segmen", "").strip()
+            if sid:
+                segmen_adj_counts[sid] += 1
+        for id_seg, count in segmen_adj_counts.items():
             if count > 1:
                 issues.append(ValidationIssue(
                     rule_no=14,
@@ -355,8 +363,8 @@ def validate(
                     id_segmen=id_seg,
                     anotator_id="",
                     pesan=(
-                        f"Segmen '{id_seg}' memiliki {count} keputusan 'final' di adjudikasi.csv. "
-                        "Hanya boleh ada satu keputusan final per segmen."
+                        f"Segmen '{id_seg}' memiliki {count} keputusan di adjudikasi.csv. "
+                        "Hanya boleh ada satu keputusan per segmen."
                     ),
                     severity="ERROR",
                 ))

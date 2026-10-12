@@ -52,6 +52,7 @@ Mode satu anotator (hanya untuk pengembangan internal):
 import argparse
 import csv
 import logging
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -64,6 +65,7 @@ logging.basicConfig(
 logger = logging.getLogger("build_ground_truth")
 
 VALID_STATUS_AKHIR: Set[str] = {"final", "batas-sisa", "dikecualikan"}
+VALID_LABELS: Set[str] = {"LB", "TJ", "MT", "HS", "SI", "LAINNYA", "TT"}
 
 GT_COLS = [
     "id_abstrak", "id_segmen", "urutan", "teks_segmen",
@@ -90,10 +92,15 @@ def load_csv(path: Path) -> List[Dict]:
         return list(csv.DictReader(f))
 
 
-def load_segmen(path: Path) -> Dict[str, Dict]:
-    """id_segmen -> row; hanya baris yang dibekukan."""
+def load_segmen(path: Path) -> Tuple[Dict[str, Dict], int]:
+    """
+    id_segmen -> row; hanya baris yang dibekukan.
+    Return: (result_dict, n_fatal_errors)
+    ID segmen duplikat adalah FATAL ERROR — berhenti setelah pelaporan.
+    """
     result: Dict[str, Dict] = {}
     n_skip = 0
+    n_dup = 0
     for row in load_csv(path):
         sid = row.get("id_segmen", "").strip()
         if not sid:
@@ -107,44 +114,61 @@ def load_segmen(path: Path) -> Dict[str, Dict]:
             n_skip += 1
             continue
         if sid in result:
-            logger.error(f"ID segmen duplikat di segmen.csv: '{sid}'")
+            logger.error(
+                f"FATAL: ID segmen duplikat di segmen.csv: '{sid}'. "
+                "Setiap segmen harus memiliki ID unik. Perbaiki segmen.csv."
+            )
+            n_dup += 1
         result[sid] = row
     if n_skip:
         logger.warning(f"{n_skip} segmen belum dibekukan, dilewati dari GT.")
-    return result
+    return result, n_dup
 
 
-def load_anotasi(path: Path) -> Dict[str, Dict]:
-    """id_segmen -> row (terakhir jika duplikat, dengan peringatan)."""
+def load_anotasi(path: Path) -> Tuple[Dict[str, Dict], int]:
+    """
+    id_segmen -> row.
+    ID segmen duplikat di anotasi adalah FATAL ERROR.
+    Return: (result_dict, n_fatal_errors)
+    """
     result: Dict[str, Dict] = {}
+    n_dup = 0
     for row in load_csv(path):
         sid = row.get("id_segmen", "").strip()
         if not sid:
             continue
         if sid in result:
-            logger.warning(
-                f"ID segmen duplikat di {path.name}: '{sid}'. Hanya yang terakhir disimpan."
+            logger.error(
+                f"FATAL: ID segmen duplikat di {path.name}: '{sid}'. "
+                "Satu anotator hanya boleh memiliki satu baris per segmen. "
+                "Hapus duplikat sebelum melanjutkan."
             )
+            n_dup += 1
         result[sid] = row
-    return result
+    return result, n_dup
 
 
-def load_adjudikasi(path: Path) -> Dict[str, Dict]:
-    """id_segmen -> row keputusan adjudikasi."""
+def load_adjudikasi(path: Path) -> Tuple[Dict[str, Dict], int]:
+    """
+    id_segmen -> row keputusan adjudikasi.
+    Dua baris apapun (bukan hanya 'final') untuk segmen yang sama adalah FATAL.
+    Return: (result_dict, n_fatal_errors)
+    """
     result: Dict[str, Dict] = {}
+    n_dup = 0
     for row in load_csv(path):
         sid = row.get("id_segmen", "").strip()
         if not sid:
             continue
         if sid in result:
-            if (result[sid].get("status_akhir", "") == "final"
-                    and row.get("status_akhir", "") == "final"):
-                logger.error(
-                    f"Segmen '{sid}': dua keputusan 'final' di adjudikasi.csv. "
-                    "Hanya satu yang diperbolehkan."
-                )
+            logger.error(
+                f"FATAL: Segmen '{sid}' memiliki lebih dari satu keputusan di adjudikasi.csv. "
+                "Hanya satu keputusan per segmen yang diperbolehkan. "
+                "Hapus duplikat sebelum melanjutkan."
+            )
+            n_dup += 1
         result[sid] = row
-    return result
+    return result, n_dup
 
 
 # ---------------------------------------------------------------------------
@@ -158,14 +182,18 @@ def _parse_label_set(label_str: str) -> frozenset:
 def needs_adjudication_two_annotators(ann1: Dict, ann2: Dict) -> Tuple[bool, List[str]]:
     """
     Dua anotator: kembalikan (perlu_adjudikasi, alasan).
-    Kondisi (Pedoman 7.3.a-c): label berbeda, ada flag, ada TT.
+    Kondisi (Pedoman 7.3.a-c): label berbeda, ada flag, ada TT, label kosong.
     """
     reasons: List[str] = []
-    label1 = ann1.get("label", "")
-    label2 = ann2.get("label", "")
+    label1 = ann1.get("label", "").strip()
+    label2 = ann2.get("label", "").strip()
     flag1 = ann1.get("flag", "").strip()
     flag2 = ann2.get("flag", "").strip()
 
+    if not label1:
+        reasons.append("label-kosong-an1")
+    if not label2:
+        reasons.append("label-kosong-an2")
     if _parse_label_set(label1) != _parse_label_set(label2):
         reasons.append(f"label-berbeda ({label1} vs {label2})")
     if flag1:
@@ -221,16 +249,19 @@ def build_ground_truth(
     stats: Dict[str, int] = defaultdict(int)
     n_error = 0
 
-    # Periksa segmen di anotasi yang tidak ada di segmen.csv
+    # Periksa segmen di anotasi yang tidak ada di segmen.csv (anotasi yatim)
+    n_orphan = 0
     all_ann_ids = set(anotasi1.keys())
     if anotasi2:
         all_ann_ids |= set(anotasi2.keys())
     for sid in sorted(all_ann_ids):
         if sid not in segmen_map:
             logger.error(
-                f"ID segmen '{sid}' ada di anotasi tetapi tidak di segmen.csv "
-                "(belum dibekukan atau tidak dikenali). Diabaikan dari GT."
+                f"FATAL: ID segmen '{sid}' ada di anotasi tetapi tidak di segmen.csv. "
+                "Anotasi yatim ini tidak diakui. Perbaiki anotasi atau segmen.csv."
             )
+            n_orphan += 1
+    n_error += n_orphan
 
     # Proses setiap segmen yang dibekukan
     for sid in sorted(segmen_map.keys()):
@@ -302,6 +333,76 @@ def build_ground_truth(
                     reasons.append("label-TT-an1")
             else:
                 perlu_adj, reasons = needs_adjudication_single_annotator(ann1)
+
+        # Validasi label an1 sebelum konsensus dapat ditetapkan
+        if ann1 and label_an1:
+            label_parts_an1 = {l.strip() for l in label_an1.split("+") if l.strip()}
+            invalid_an1 = label_parts_an1 - VALID_LABELS
+            if invalid_an1:
+                logger.error(
+                    f"Segmen '{sid}': label_an1 mengandung nilai tidak valid: "
+                    f"{sorted(invalid_an1)}. Segmen tidak dapat ditetapkan konsensus."
+                )
+                perlu_adj = True
+                reasons = [f"label-tidak-valid-an1={invalid_an1}"]
+
+        if ann2 and label_an2:
+            label_parts_an2 = {l.strip() for l in label_an2.split("+") if l.strip()}
+            invalid_an2 = label_parts_an2 - VALID_LABELS
+            if invalid_an2:
+                logger.error(
+                    f"Segmen '{sid}': label_an2 mengandung nilai tidak valid: "
+                    f"{sorted(invalid_an2)}. Segmen tidak dapat ditetapkan konsensus."
+                )
+                perlu_adj = True
+                reasons = [f"label-tidak-valid-an2={invalid_an2}"]
+
+        # Label kosong: segmen belum dianotasi dengan benar
+        if ann1 and not label_an1:
+            logger.error(
+                f"Segmen '{sid}': label_an1 KOSONG. Label kosong tidak dapat "
+                "menjadi konsensus. Segmen dinyatakan belum-selesai."
+            )
+            n_error += 1
+            gt_rows.append({
+                "id_abstrak": id_abstrak, "id_segmen": sid,
+                "urutan": urutan, "teks_segmen": teks,
+                "label_an1": label_an1, "label_an2": label_an2,
+                "label_akhir": "", "label_alt_sisa": "",
+                "flag_an1": flag_an1, "flag_an2": flag_an2,
+                "alasan_an1": alasan_an1, "alasan_an2": alasan_an2,
+                "simpul_an1": simpul_an1, "simpul_an2": simpul_an2,
+                "status_akhir": "belum-selesai",
+                "sumber_keputusan": "-",
+                "adjudikator_id": "", "alasan_adjudikasi": "",
+                "versi_pedoman": versi,
+                "catatan_gt": "label_an1 kosong; bukan konsensus.",
+            })
+            stats["belum-selesai"] += 1
+            continue
+
+        if mode_dua_anotator and ann2 and not label_an2:
+            logger.error(
+                f"Segmen '{sid}': label_an2 KOSONG. Label kosong tidak dapat "
+                "menjadi konsensus. Segmen dinyatakan belum-selesai."
+            )
+            n_error += 1
+            gt_rows.append({
+                "id_abstrak": id_abstrak, "id_segmen": sid,
+                "urutan": urutan, "teks_segmen": teks,
+                "label_an1": label_an1, "label_an2": label_an2,
+                "label_akhir": "", "label_alt_sisa": "",
+                "flag_an1": flag_an1, "flag_an2": flag_an2,
+                "alasan_an1": alasan_an1, "alasan_an2": alasan_an2,
+                "simpul_an1": simpul_an1, "simpul_an2": simpul_an2,
+                "status_akhir": "belum-selesai",
+                "sumber_keputusan": "-",
+                "adjudikator_id": "", "alasan_adjudikasi": "",
+                "versi_pedoman": versi,
+                "catatan_gt": "label_an2 kosong; bukan konsensus.",
+            })
+            stats["belum-selesai"] += 1
+            continue
 
         konsensus_dua = (not perlu_adj and mode_dua_anotator and ann2 is not None)
         konsensus_satu_internal = (not perlu_adj and not mode_dua_anotator
@@ -395,10 +496,11 @@ def build_ground_truth(
 
     if n_error > 0:
         logger.error(
-            f"{n_error} segmen memiliki error serius (belum-selesai). "
+            f"{n_error} segmen memiliki error serius (belum-selesai atau fatal). "
             "Hitung kelengkapan TIDAK boleh dijalankan sampai semua segmen selesai."
         )
 
+    stats["n_error"] = n_error
     return gt_rows, stats
 
 
@@ -435,14 +537,52 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    segmen_map = load_segmen(Path(args.segmen))
-    anotasi1 = load_anotasi(Path(args.anotasi_1))
-    anotasi2 = load_anotasi(Path(args.anotasi_2)) if args.anotasi_2 else None
-    adjudikasi = load_adjudikasi(Path(args.adjudikasi))
+    n_fatal = 0
+
+    segmen_map, n_seg_dup = load_segmen(Path(args.segmen))
+    n_fatal += n_seg_dup
+
+    anotasi1, n_ann1_dup = load_anotasi(Path(args.anotasi_1))
+    n_fatal += n_ann1_dup
+
+    anotasi2 = None
+    if args.anotasi_2:
+        anotasi2_raw, n_ann2_dup = load_anotasi(Path(args.anotasi_2))
+        n_fatal += n_ann2_dup
+        anotasi2 = anotasi2_raw
+
+    adjudikasi, n_adj_dup = load_adjudikasi(Path(args.adjudikasi))
+    n_fatal += n_adj_dup
+
+    if n_fatal > 0:
+        msg = (
+            f"FATAL ERROR: {n_fatal} error fatal ditemukan pada input "
+            "(duplikat ID segmen/anotasi atau keputusan adjudikasi ganda). "
+            "Proses dihentikan tanpa menghasilkan ground_truth.csv."
+        )
+        logger.error(msg)
+        lap_path = output_dir / "laporan_ground_truth.txt"
+        with open(lap_path, "w", encoding="utf-8") as f:
+            f.write(
+                "=" * 60 + "\n"
+                + "LAPORAN GROUND TRUTH (GAGAL)\n"
+                + "=" * 60 + "\n"
+                + msg + "\n"
+            )
+        sys.exit(1)
 
     if not segmen_map:
-        logger.error("Tidak ada segmen yang dibekukan di segmen.csv.")
-        return
+        msg = "FATAL ERROR: Tidak ada segmen yang dibekukan di segmen.csv."
+        logger.error(msg)
+        lap_path = output_dir / "laporan_ground_truth.txt"
+        with open(lap_path, "w", encoding="utf-8") as f:
+            f.write(
+                "=" * 60 + "\n"
+                + "LAPORAN GROUND TRUTH (GAGAL)\n"
+                + "=" * 60 + "\n"
+                + msg + "\n"
+            )
+        sys.exit(1)
 
     if args.single_annotator_no_adjudication:
         logger.warning(
@@ -458,6 +598,7 @@ def main() -> None:
         adjudikasi=adjudikasi,
         single_annotator_no_adj=args.single_annotator_no_adjudication,
     )
+    n_error = stats.get("n_error", 0) + stats.get("belum-selesai", 0)
 
     gt_path = output_dir / "ground_truth.csv"
     with open(gt_path, "w", encoding="utf-8", newline="") as f:
@@ -481,9 +622,9 @@ def main() -> None:
         f"BELUM SELESAI             : {stats.get('belum-selesai', 0)}",
         "",
     ]
-    if stats.get("belum-selesai", 0) > 0:
+    if n_error > 0:
         laporan_lines.append(
-            "PERINGATAN: Ada segmen belum-selesai. "
+            f"ERROR: {n_error} segmen belum-selesai. "
             "Jangan hitung kelengkapan sampai semua selesai."
         )
     else:
@@ -495,6 +636,9 @@ def main() -> None:
     with open(lap_path, "w", encoding="utf-8") as f:
         f.write("\n".join(laporan_lines))
     logger.info(f"Laporan ditulis: {lap_path}")
+
+    if n_error > 0:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
