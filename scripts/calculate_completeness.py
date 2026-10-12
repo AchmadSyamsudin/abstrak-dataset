@@ -4,43 +4,45 @@
 calculate_completeness.py
 ==========================
 Menghitung vektor kelengkapan abstrak dari GROUND TRUTH LENGKAP (ground_truth.csv),
-sesuai Bagian 6 Pedoman v1.0.
+sesuai Bagian 6 Pedoman v1.0 (dibekukan 2026-10-11).
 
-PERBAIKAN v2:
-- Input utama: ground_truth.csv (bukan adjudikasi.csv) agar segmen konsensus
-  di luar antrean adjudikasi tidak terlewat.
-- TT yang belum diselesaikan MENGHENTIKAN metrik utama untuk abstrak terkait
-  (status = "BLOKIR-TT", bukan dilewati diam-diam).
-- Segmen 'belum-selesai' di ground truth menyebabkan abstrak menjadi "TAK PASTI"
-  dan tidak masuk metrik utama.
-- v-min/v-maks diimplementasikan persis sesuai K5: per-segmen tentukan semua
-  pembacaan, lalu agregasikan per komponen.
+INPUT: ground_truth.csv (output build_ground_truth.py)
+BUKAN lagi adjudikasi.csv — hal ini memastikan segmen konsensus yang tidak
+masuk antrean adjudikasi tetap dihitung.
 
-Aturan:
-- K1: Hanya label_akhir yang masuk vektor utama (v). Label alternatif hanya untuk v-maks.
-- K2: Segmen berlabel ganda menyumbang semua labelnya ke v.
-- K3: LAINNYA dan dikecualikan tidak menyumbang v utama.
-- K4: LENGKAP ⟺ v = (1,1,1,1,1).
-- K5: v-min = komponen hadir di SETIAP pembacaan sah;
-      v-maks = komponen hadir di SEKURANG-KURANGNYA satu pembacaan sah.
-      "Pembacaan sah" per segmen: {label_akhir} DAN {tiap label_alt} dihitung
-      sebagai pembacaan alternatif. Semua himpunan pembacaan per segmen:
-        readings = [{label_akhir_komponen}]
-        jika batas-sisa: readings += [{tiap label_alt komponen}]
-      v-min per abstrak = ∩ (union_per_segmen) (komponen yang hadir di semua segmen
-      dari semua pembacaan; didefinisikan: komponen selalu menyumbang jika hadir di
-      SEMUA pembacaan SEMUA segmen relevan)
-      Implementasi: untuk v-min, komponen k diperhitungkan hanya jika k hadir di
-      setiap pembacaan dari setiap segmen batas-sisa.
-- K6: Tidak diimplementasikan sebagai aturan terpisah (tercakup oleh K4).
-- K7: Kehadiran tidak menilai ukuran; satu segmen cukup per komponen.
-- K8: Satuan satu abstrak.
+Implementasi aturan K1–K8 (Bagian 6.3):
+──────────────────────────────────────────
+K1. Yang dihitung adalah label_akhir (data emas). Label alternatif hanya
+    dipakai pada v-min dan v-maks (K5).
+K2. Segmen berlabel ganda menyumbang semua labelnya ke v.
+K3. LAINNYA dan segmen dikecualikan tidak menyumbang v utama.
+    Label TT harus sudah diselesaikan lewat adjudikasi sebelum vektor dihitung.
+K4. LENGKAP ⟺ v = (1,1,1,1,1). Selain itu TIDAK LENGKAP.
+K5. Dua vektor tambahan dihitung secara simetris:
+    • Segmen final: satu pembacaan = {label_akhir_komponen}
+    • Segmen batas-sisa: pembacaan = [{label_akhir}] + [satu untuk tiap label_alt]
+    • Segmen dikecualikan: pembacaan = [∅] + [satu untuk tiap label kandidat]
+      (pembacaan tanpa label mewakili "mungkin tidak ada komponen sama sekali")
+    v-min[k] = 1 jika ada SEGMEN yang memuat k pada SETIAP pembacaannya
+    v-maks[k] = 1 jika ada SEGMEN yang memuat k pada SEKURANG-KURANGNYA
+                satu pembacaannya
+    Jika v-min == v-maks: status pasti; jika berbeda: TAK PASTI.
+K6. Abstrak tanpa HS → HS=0 → TIDAK LENGKAP.
+K7. Satu segmen cukup untuk satu komponen.
+K8. Satuan: satu abstrak.
 
-TT belum selesai: status abstrak = "BLOKIR-TT"; metrik utama tidak dihitung.
-Segmen belum-selesai: status abstrak = "TAK PASTI"; tidak masuk metrik utama.
+Penghentian metrik (HARD STOP per abstrak):
+──────────────────────────────────────────
+• Segmen berstatus 'belum-selesai' di ground truth → abstrak ditandai
+  BLOKIR-BELUMSELESAI dan TIDAK MASUK kelengkapan_abstrak.csv sama sekali
+  (kecuali dengan --include-incomplete).
+• Label TT yang belum diselesaikan di label_akhir → abstrak ditandai
+  BLOKIR-TT dan TIDAK MASUK metrik utama.
+• Keduanya dilaporkan terpisah di laporan_kelengkapan_error.csv.
 
 Output:
-- kelengkapan_abstrak.csv
+- kelengkapan_abstrak.csv      — abstrak yang dapat dihitung (pasti & TAK PASTI)
+- laporan_kelengkapan_error.csv — abstrak yang diblokir (BLOKIR-TT, BLOKIR-BELUMSELESAI)
 - ringkasan_kelengkapan.txt
 
 Penggunaan:
@@ -55,7 +57,7 @@ import csv
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,6 +67,8 @@ logging.basicConfig(
 logger = logging.getLogger("calculate_completeness")
 
 KOMPONEN: List[str] = ["LB", "TJ", "MT", "HS", "SI"]
+
+# Status segmen yang valid dari ground_truth.csv
 VALID_STATUS_GT: Set[str] = {"final", "batas-sisa", "dikecualikan", "belum-selesai"}
 
 KELENGKAPAN_COLS = [
@@ -76,6 +80,11 @@ KELENGKAPAN_COLS = [
     "vmin_vektor", "vmaks_vektor",
     "status_kepastian",
     "catatan",
+]
+
+ERROR_COLS = [
+    "id_abstrak", "jenis_studi", "peran_data",
+    "status_blokir", "catatan",
 ]
 
 
@@ -91,7 +100,9 @@ def load_csv(path: Path) -> List[Dict]:
 def load_abstrak(path: Path) -> Dict[str, Dict]:
     result = {}
     for row in load_csv(path):
-        result[row["id_abstrak"]] = row
+        aid = row.get("id_abstrak", "")
+        if aid:
+            result[aid] = row
     return result
 
 
@@ -100,27 +111,26 @@ def load_abstrak(path: Path) -> Dict[str, Dict]:
 # ---------------------------------------------------------------------------
 
 def parse_labels(label_str: str) -> Set[str]:
-    """Parse '+'-separated label menjadi set komponen."""
+    """Parse '+'-separated label menjadi set."""
     return {l.strip() for l in label_str.split("+") if l.strip()}
 
 
 def parse_label_alt_readings(label_alt_str: str) -> List[Set[str]]:
     """
     Parse label_alt menjadi daftar himpunan pembacaan alternatif.
-    Setiap alternatif (dipisah ';') dianggap satu pembacaan terpisah.
+    Setiap alternatif dipisah ';'; tiap alternatif bisa label ganda ('+').
     """
     readings: List[Set[str]] = []
     for part in label_alt_str.split(";"):
         part = part.strip()
         if not part:
             continue
-        # Setiap alternatif bisa berupa label ganda ('+')
         readings.append(parse_labels(part))
     return readings
 
 
 # ---------------------------------------------------------------------------
-# v-min/v-maks per segmen (K5)
+# K5: pembacaan per segmen
 # ---------------------------------------------------------------------------
 
 def get_segment_readings(
@@ -129,38 +139,62 @@ def get_segment_readings(
     status: str,
 ) -> List[Set[str]]:
     """
-    Tentukan SEMUA pembacaan sah untuk satu segmen sesuai K5.
+    Tentukan SEMUA pembacaan sah untuk satu segmen sesuai K5 Pedoman v1.0.
 
-    Untuk segmen 'final': satu pembacaan = {label_akhir komponen}.
-    Untuk segmen 'batas-sisa': pembacaan = [{label_akhir}] + [tiap label_alt].
-    Komponen yang bukan dalam KOMPONEN (mis. LAINNYA, TT) disaring.
+    Segmen final:
+        satu pembacaan = {komponen dari label_akhir}
+
+    Segmen batas-sisa:
+        pembacaan = [{label_akhir_komponen}]
+                  + [{tiap label_alt_komponen}]
+
+    Segmen dikecualikan:
+        pembacaan = [∅]  (pembacaan tanpa label — tidak ada yang dapat dipastikan)
+                  + [{tiap label_kandidat_komponen dari label_alt}]
+        Catatan: pembacaan ∅ memastikan v-min untuk segmen ini selalu 0
+        untuk semua komponen (irisan dengan {} = {}).
+
+    Hanya komponen dalam KOMPONEN (LB, TJ, MT, HS, SI) yang dipertahankan.
     """
-    label_akhir = {l for l in parse_labels(label_akhir_str) if l in KOMPONEN}
-    readings = [label_akhir]
+    label_akhir_komp = {l for l in parse_labels(label_akhir_str) if l in KOMPONEN}
 
-    if status == "batas-sisa" and label_alt_str.strip():
-        alt_readings = parse_label_alt_readings(label_alt_str)
-        for alt_set in alt_readings:
-            alt_komponen = {l for l in alt_set if l in KOMPONEN}
-            readings.append(alt_komponen)
+    if status == "dikecualikan":
+        # Pembacaan pertama: himpunan kosong (tidak ada komponen yang pasti)
+        readings: List[Set[str]] = [set()]
+        # Tambahkan tiap label kandidat dari label_alt sebagai pembacaan alternatif
+        for alt_set in parse_label_alt_readings(label_alt_str):
+            alt_komp = {l for l in alt_set if l in KOMPONEN}
+            readings.append(alt_komp)
+        return readings
 
-    return readings
+    if status == "batas-sisa":
+        readings = [label_akhir_komp]
+        for alt_set in parse_label_alt_readings(label_alt_str):
+            alt_komp = {l for l in alt_set if l in KOMPONEN}
+            readings.append(alt_komp)
+        return readings
+
+    # Status final (atau status lain yang tidak dikenali): satu pembacaan
+    return [label_akhir_komp]
 
 
 def segment_vmin_vmaks(readings: List[Set[str]]) -> Tuple[Set[str], Set[str]]:
     """
-    Hitung v-min dan v-maks untuk satu segmen berdasarkan daftar pembacaan.
-    v-min = ∩ (semua pembacaan) — komponen yang hadir di SETIAP pembacaan.
-    v-maks = ∪ (semua pembacaan) — komponen yang hadir di minimal satu pembacaan.
+    Hitung v-min dan v-maks untuk satu segmen dari daftar pembacaan.
+
+    v-min (segmen) = ∩ semua pembacaan — komponen yang hadir di SETIAP pembacaan.
+    v-maks (segmen) = ∪ semua pembacaan — komponen yang hadir di MINIMAL satu pembacaan.
+
+    Jika tidak ada pembacaan: kembalikan (∅, ∅).
     """
     if not readings:
         return set(), set()
     vmin = readings[0].copy()
     for r in readings[1:]:
-        vmin &= r  # irisan
+        vmin &= r
     vmaks: Set[str] = set()
     for r in readings:
-        vmaks |= r  # gabungan
+        vmaks |= r
     return vmin, vmaks
 
 
@@ -169,48 +203,60 @@ def segment_vmin_vmaks(readings: List[Set[str]]) -> Tuple[Set[str], Set[str]]:
 # ---------------------------------------------------------------------------
 
 class AbstractCompleteness:
+    """
+    Akumulasi vektor kelengkapan untuk satu abstrak.
+
+    Agregasi v-min antar-segmen (K5):
+        v-min_abstrak[k] = 1 jika ADA segmen yang memuat k di SETIAP pembacaannya.
+        → Ini adalah UNION dari v-min_segmen atas semua segmen.
+        Implementasi: v-min_abstrak[k] = max(v-min_segmen[k]) untuk semua segmen.
+
+    Agregasi v-maks antar-segmen (K5):
+        v-maks_abstrak[k] = 1 jika ADA segmen yang memuat k di MINIMAL satu pembacaannya.
+        → Ini adalah UNION dari v-maks_segmen atas semua segmen.
+        Implementasi: v-maks_abstrak[k] = max(v-maks_segmen[k]) untuk semua segmen.
+    """
+
     def __init__(self, id_abstrak: str):
         self.id_abstrak = id_abstrak
+        # v utama (dari label_akhir, K1)
         self.v: Dict[str, int] = {k: 0 for k in KOMPONEN}
-        self.vmin: Dict[str, int] = {k: 1 for k in KOMPONEN}  # mulai semua 1
+        # v-min: union dari vmin per segmen (K5)
+        self.vmin: Dict[str, int] = {k: 0 for k in KOMPONEN}
+        # v-maks: union dari vmaks per segmen (K5)
         self.vmaks: Dict[str, int] = {k: 0 for k in KOMPONEN}
         self.catatan: List[str] = []
-        self.has_unresolved_tt: bool = False
-        self.has_pending_segments: bool = False  # belum-selesai
-        self.has_boundary_segments: bool = False  # batas-sisa
-        self._any_segment_seen: bool = False  # untuk inisialisasi vmin
+        # Flag penghentian keras
+        self.has_unresolved_tt: bool = False    # label_akhir masih TT
+        self.has_pending_segments: bool = False  # status belum-selesai
+        # Flag untuk menentukan kepastian
+        self.has_uncertain_segments: bool = False  # batas-sisa atau dikecualikan
 
     def update_from_segment(self, readings: List[Set[str]], status: str) -> None:
         """
-        Update v, v-min, v-maks dari satu segmen (label sudah dalam KOMPONEN).
+        Update v, v-min, v-maks dari satu segmen.
+
+        v hanya dari readings[0] (label_akhir sesuai K1).
+        v-min dan v-maks: union ke seluruh abstrak.
         """
         if not readings:
             return
 
-        # v: dari pembacaan pertama (label_akhir)
+        # v utama: dari pembacaan pertama saja (K1 — label_akhir)
         for k in readings[0]:
             self.v[k] = 1
 
-        # v-min dan v-maks per segmen
+        # Per-segmen v-min dan v-maks (K5)
         seg_vmin, seg_vmaks = segment_vmin_vmaks(readings)
 
-        # Agregasi v-maks: union ke seluruh abstrak
+        # Agregasi ke abstrak: union (komponen hadir jika ADA SEGMEN yang memuat)
+        for k in seg_vmin:
+            self.vmin[k] = 1
         for k in seg_vmaks:
             self.vmaks[k] = 1
 
-        # Agregasi v-min: inisialisasi pertama kali, lalu interseksi
-        if not self._any_segment_seen:
-            # Pertama: set vmin sesuai vmin segmen pertama
-            self.vmin = {k: (1 if k in seg_vmin else 0) for k in KOMPONEN}
-            self._any_segment_seen = True
-        else:
-            # Interseksi: komponen harus hadir di SEMUA segmen
-            for k in KOMPONEN:
-                if k not in seg_vmin:
-                    self.vmin[k] = 0
-
-        if status == "batas-sisa":
-            self.has_boundary_segments = True
+        if status in ("batas-sisa", "dikecualikan"):
+            self.has_uncertain_segments = True
 
 
 # ---------------------------------------------------------------------------
@@ -219,11 +265,16 @@ class AbstractCompleteness:
 
 def compute_completeness(
     gt_rows: List[Dict],
-) -> Dict[str, AbstractCompleteness]:
+) -> Tuple[Dict[str, AbstractCompleteness], Dict[str, Dict]]:
     """
     Hitung vektor kelengkapan untuk setiap abstrak dari ground_truth.csv.
+
+    Return: (completeness_map, blocked_map)
+    - completeness_map: id_abstrak -> AbstractCompleteness (abstrak yang bisa dihitung)
+    - blocked_map: id_abstrak -> {"status_blokir": ..., "catatan": [...]}
     """
     results: Dict[str, AbstractCompleteness] = {}
+    blocked: Dict[str, Dict] = {}  # abstrak yang diblokir
 
     for row in gt_rows:
         id_abstrak = row.get("id_abstrak", "").strip()
@@ -235,56 +286,55 @@ def compute_completeness(
         if not id_abstrak:
             continue
 
+        # Inisialisasi struktur jika belum ada
         if id_abstrak not in results:
             results[id_abstrak] = AbstractCompleteness(id_abstrak)
+        if id_abstrak not in blocked:
+            blocked[id_abstrak] = {"status_blokir": None, "catatan": []}
 
         comp = results[id_abstrak]
+        blk = blocked[id_abstrak]
 
-        # Segmen belum-selesai: tandai abstrak TAK PASTI
-        if status == "belum-selesai" or status not in VALID_STATUS_GT:
+        # 1. HARD STOP: Segmen belum-selesai
+        if status == "belum-selesai" or (status and status not in VALID_STATUS_GT):
             comp.has_pending_segments = True
-            comp.catatan.append(
-                f"{id_segmen}: belum-selesai, abstrak tidak dapat dihitung."
-            )
+            msg = f"{id_segmen}: status='{status}' (belum-selesai)."
+            comp.catatan.append(msg)
+            if blk["status_blokir"] not in ("BLOKIR-TT",):
+                blk["status_blokir"] = "BLOKIR-BELUMSELESAI"
+            blk["catatan"].append(msg)
             continue
 
-        # Dikecualikan: tetap dicatat, tidak menyumbang v utama
-        if status == "dikecualikan":
-            comp.catatan.append(f"{id_segmen}: dikecualikan.")
-            # Menyumbang v-maks dari label_alt jika ada
-            for alt_set in parse_label_alt_readings(label_alt_raw):
-                for k in alt_set:
-                    if k in KOMPONEN:
-                        comp.vmaks[k] = 1
-            comp.has_boundary_segments = True
-            continue
-
-        # TT yang belum diselesaikan (seharusnya sudah diresolvasi di adj, tapi jaga-jaga)
+        # 2. HARD STOP: TT belum diselesaikan di label_akhir
         label_set = parse_labels(label_akhir_raw)
         if "TT" in label_set:
             comp.has_unresolved_tt = True
-            comp.catatan.append(
-                f"{id_segmen}: label_akhir masih TT. "
-                "TT harus diselesaikan melalui adjudikasi. "
-                "Segmen ini tidak menyumbang vektor."
+            msg = (
+                f"{id_segmen}: label_akhir='TT' belum diselesaikan. "
+                "TT harus diselesaikan melalui adjudikasi (Pedoman K3)."
             )
+            comp.catatan.append(msg)
+            blk["status_blokir"] = "BLOKIR-TT"  # TT menang atas belum-selesai
+            blk["catatan"].append(msg)
             continue
 
-        # LAINNYA: tidak menyumbang komponen apapun
+        # 3. Dikecualikan: tidak menyumbang v utama (K3), tetapi menyumbang v-min/v-maks (K5)
+        if status == "dikecualikan":
+            comp.catatan.append(f"{id_segmen}: dikecualikan (K3).")
+            readings = get_segment_readings("", label_alt_raw, "dikecualikan")
+            comp.update_from_segment(readings, "dikecualikan")
+            continue
+
+        # 4. LAINNYA / label kosong: tidak menyumbang apapun
         if label_set == {"LAINNYA"} or not label_set:
             comp.catatan.append(f"{id_segmen}: LAINNYA/kosong, tidak menyumbang.")
             continue
 
-        # Tentukan semua pembacaan dan update
+        # 5. Normal (final atau batas-sisa): update v, v-min, v-maks
         readings = get_segment_readings(label_akhir_raw, label_alt_raw, status)
         comp.update_from_segment(readings, status)
 
-    # Reset vmin untuk abstrak yang tidak ada segmen sama sekali
-    for comp in results.values():
-        if not comp._any_segment_seen:
-            comp.vmin = {k: 0 for k in KOMPONEN}
-
-    return results
+    return results, blocked
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +360,10 @@ def determine_status(v: Dict[str, int]) -> Tuple[str, str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Hitung vektor kelengkapan abstrak dari ground truth lengkap."
+        description=(
+            "Hitung vektor kelengkapan abstrak dari ground truth lengkap "
+            "(sesuai Pedoman v1.0 Bagian 6)."
+        )
     )
     parser.add_argument(
         "--ground-truth", "-g",
@@ -338,13 +391,13 @@ def main() -> None:
 
     gt_rows = load_csv(gt_path)
 
-    # Periksa: ada segmen belum-selesai?
+    # Informasi awal tentang segmen bermasalah
     n_pending = sum(1 for r in gt_rows if r.get("status_akhir", "") == "belum-selesai")
     if n_pending > 0:
         logger.error(
-            f"BLOKIR: {n_pending} segmen berstatus 'belum-selesai' di ground_truth.csv. "
-            "Selesaikan adjudikasi terlebih dahulu sebelum menghitung kelengkapan. "
-            "Abstrak yang terdampak akan dilaporkan sebagai TAK PASTI."
+            f"DITEMUKAN {n_pending} segmen 'belum-selesai' di ground_truth.csv. "
+            "Abstrak yang terdampak akan diblokir dari metrik kelengkapan. "
+            "Selesaikan adjudikasi dan jalankan ulang build_ground_truth.py."
         )
 
     abstrak_map: Dict[str, Dict] = {}
@@ -354,89 +407,109 @@ def main() -> None:
     else:
         logger.warning(f"abstrak.csv tidak ditemukan: {abstrak_path}.")
 
-    completeness = compute_completeness(gt_rows)
+    completeness, blocked = compute_completeness(gt_rows)
 
     if not completeness:
         logger.error("Tidak ada data kelengkapan yang dapat dihitung.")
         return
 
     output_rows: List[Dict] = []
+    error_rows: List[Dict] = []
     n_lengkap = 0
     n_tidak_lengkap = 0
     n_tak_pasti = 0
     n_blokir_tt = 0
+    n_blokir_pending = 0
     jenis_studi_stats: Dict[str, Dict[str, int]] = defaultdict(
-        lambda: {"LENGKAP": 0, "TIDAK LENGKAP": 0, "TAK PASTI": 0, "BLOKIR-TT": 0}
+        lambda: {"LENGKAP": 0, "TIDAK LENGKAP": 0, "TAK PASTI": 0,
+                 "BLOKIR-TT": 0, "BLOKIR-BELUMSELESAI": 0}
     )
 
-    for id_abstrak, comp in sorted(completeness.items()):
+    for id_abstrak in sorted(completeness.keys()):
+        comp = completeness[id_abstrak]
+        blk = blocked.get(id_abstrak, {})
         abst_meta = abstrak_map.get(id_abstrak, {})
         jenis_studi = abst_meta.get("jenis_studi", "")
         peran_data = abst_meta.get("peran_data", "")
-
         catatan = "; ".join(comp.catatan)
 
-        # TT yang belum selesai → BLOKIR metrik utama
-        if comp.has_unresolved_tt:
-            final_status = "BLOKIR-TT"
-            status_kepastian = "TIDAK PASTI"
+        status_blokir = blk.get("status_blokir")
+
+        # Abstrak diblokir: catat di laporan error, TIDAK masuk kelengkapan_abstrak.csv
+        if status_blokir == "BLOKIR-TT":
             n_blokir_tt += 1
             jenis_studi_stats[jenis_studi]["BLOKIR-TT"] += 1
-            catatan = "PERINGATAN: Ada TT belum diselesaikan. " + catatan
+            error_rows.append({
+                "id_abstrak": id_abstrak,
+                "jenis_studi": jenis_studi,
+                "peran_data": peran_data,
+                "status_blokir": "BLOKIR-TT",
+                "catatan": "; ".join(blk.get("catatan", [])),
+            })
+            logger.error(
+                f"BLOKIR-TT: {id_abstrak} — label_akhir masih TT. "
+                "Tidak masuk metrik kelengkapan."
+            )
+            continue
 
-        # Segmen belum-selesai → TAK PASTI
-        elif comp.has_pending_segments:
+        if status_blokir == "BLOKIR-BELUMSELESAI" or comp.has_pending_segments:
+            n_blokir_pending += 1
+            jenis_studi_stats[jenis_studi]["BLOKIR-BELUMSELESAI"] += 1
+            error_rows.append({
+                "id_abstrak": id_abstrak,
+                "jenis_studi": jenis_studi,
+                "peran_data": peran_data,
+                "status_blokir": "BLOKIR-BELUMSELESAI",
+                "catatan": "; ".join(blk.get("catatan", [])),
+            })
+            logger.error(
+                f"BLOKIR-BELUMSELESAI: {id_abstrak} — ada segmen belum-selesai. "
+                "Tidak masuk metrik kelengkapan."
+            )
+            continue
+
+        # Abstrak dapat dihitung
+        status_v, missing = determine_status(comp.v)
+        vmin_eq_vmaks = all(comp.vmin[k] == comp.vmaks[k] for k in KOMPONEN)
+
+        if vmin_eq_vmaks and not comp.has_uncertain_segments:
+            # Pasti (tidak ada segmen batas-sisa/dikecualikan atau v-min == v-maks)
+            status_kepastian = "pasti"
+            final_status = status_v
+        elif vmin_eq_vmaks:
+            # Ada segmen tidak pasti tapi v-min == v-maks → hasilnya tetap pasti
+            status_kepastian = "pasti"
+            final_status = status_v
+        else:
+            # v-min != v-maks → TAK PASTI (K5)
+            status_kepastian = "TAK PASTI"
             final_status = "TAK PASTI"
-            status_kepastian = "TIDAK PASTI"
+
+        if status_kepastian == "pasti":
+            if final_status == "LENGKAP":
+                n_lengkap += 1
+                jenis_studi_stats[jenis_studi]["LENGKAP"] += 1
+            else:
+                n_tidak_lengkap += 1
+                jenis_studi_stats[jenis_studi]["TIDAK LENGKAP"] += 1
+        else:
             n_tak_pasti += 1
             jenis_studi_stats[jenis_studi]["TAK PASTI"] += 1
-
-        else:
-            status_v, missing = determine_status(comp.v)
-            # Periksa apakah v-min == v-maks untuk semua komponen
-            all_same = all(comp.vmin[k] == comp.vmaks[k] for k in KOMPONEN)
-            if all_same or not comp.has_boundary_segments:
-                status_kepastian = "pasti"
-                final_status = status_v
-            else:
-                status_kepastian = "TAK PASTI"
-                final_status = "TAK PASTI"
-                n_tak_pasti += 1
-                jenis_studi_stats[jenis_studi]["TAK PASTI"] += 1
-
-            if status_kepastian == "pasti":
-                if final_status == "LENGKAP":
-                    n_lengkap += 1
-                    jenis_studi_stats[jenis_studi]["LENGKAP"] += 1
-                else:
-                    n_tidak_lengkap += 1
-                    jenis_studi_stats[jenis_studi]["TIDAK LENGKAP"] += 1
-
-        status_v, missing = determine_status(comp.v)
-        vmin_status, vmin_missing = determine_status(comp.vmin)
-        vmaks_status, _ = determine_status(comp.vmaks)
 
         output_rows.append({
             "id_abstrak": id_abstrak,
             "jenis_studi": jenis_studi,
             "peran_data": peran_data,
-            "v_LB": comp.v["LB"],
-            "v_TJ": comp.v["TJ"],
-            "v_MT": comp.v["MT"],
-            "v_HS": comp.v["HS"],
-            "v_SI": comp.v["SI"],
+            "v_LB": comp.v["LB"], "v_TJ": comp.v["TJ"],
+            "v_MT": comp.v["MT"], "v_HS": comp.v["HS"], "v_SI": comp.v["SI"],
             "vektor": format_vector(comp.v),
             "status": final_status,
-            "komponen_hilang": missing if final_status not in ("TAK PASTI", "BLOKIR-TT") else "",
-            "vmin_LB": comp.vmin["LB"],
-            "vmin_TJ": comp.vmin["TJ"],
-            "vmin_MT": comp.vmin["MT"],
-            "vmin_HS": comp.vmin["HS"],
+            "komponen_hilang": missing if final_status not in ("TAK PASTI",) else "",
+            "vmin_LB": comp.vmin["LB"], "vmin_TJ": comp.vmin["TJ"],
+            "vmin_MT": comp.vmin["MT"], "vmin_HS": comp.vmin["HS"],
             "vmin_SI": comp.vmin["SI"],
-            "vmaks_LB": comp.vmaks["LB"],
-            "vmaks_TJ": comp.vmaks["TJ"],
-            "vmaks_MT": comp.vmaks["MT"],
-            "vmaks_HS": comp.vmaks["HS"],
+            "vmaks_LB": comp.vmaks["LB"], "vmaks_TJ": comp.vmaks["TJ"],
+            "vmaks_MT": comp.vmaks["MT"], "vmaks_HS": comp.vmaks["HS"],
             "vmaks_SI": comp.vmaks["SI"],
             "vmin_vektor": format_vector(comp.vmin),
             "vmaks_vektor": format_vector(comp.vmaks),
@@ -444,31 +517,62 @@ def main() -> None:
             "catatan": catatan,
         })
 
-    # Tulis CSV
+    # Tulis kelengkapan_abstrak.csv
     out_path = output_dir / "kelengkapan_abstrak.csv"
     with open(out_path, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=KELENGKAPAN_COLS, quoting=csv.QUOTE_MINIMAL)
+        writer = csv.DictWriter(
+            f, fieldnames=KELENGKAPAN_COLS, quoting=csv.QUOTE_MINIMAL
+        )
         writer.writeheader()
         writer.writerows(output_rows)
-    logger.info(f"kelengkapan_abstrak.csv ditulis: {out_path} ({len(output_rows)} baris)")
+    logger.info(
+        f"kelengkapan_abstrak.csv ditulis: {out_path} ({len(output_rows)} baris)"
+    )
 
-    # Ringkasan
-    n_total = len(output_rows)
+    # Tulis laporan_kelengkapan_error.csv
+    err_path = output_dir / "laporan_kelengkapan_error.csv"
+    with open(err_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=ERROR_COLS, quoting=csv.QUOTE_MINIMAL
+        )
+        writer.writeheader()
+        writer.writerows(error_rows)
+    if error_rows:
+        logger.error(
+            f"laporan_kelengkapan_error.csv ditulis: {err_path} "
+            f"({len(error_rows)} abstrak diblokir)"
+        )
+
+    # Tulis ringkasan
+    n_total_dihitung = len(output_rows)
+    n_total_blokir = len(error_rows)
     ringkasan_lines = [
-        "=" * 60,
-        "RINGKASAN KELENGKAPAN ABSTRAK",
-        "=" * 60,
-        f"Total abstrak   : {n_total}",
-        f"LENGKAP         : {n_lengkap}",
-        f"TIDAK LENGKAP   : {n_tidak_lengkap}",
-        f"TAK PASTI       : {n_tak_pasti} (v-min != v-maks; analisis sensitivitas)",
-        f"BLOKIR-TT       : {n_blokir_tt} (ada TT belum diselesaikan)",
+        "=" * 65,
+        "RINGKASAN KELENGKAPAN ABSTRAK (Pedoman v1.0, Bagian 6)",
+        "=" * 65,
+        f"Total abstrak di GT          : {n_total_dihitung + n_total_blokir}",
+        f"Abstrak dapat dihitung       : {n_total_dihitung}",
+        f"  LENGKAP (pasti)            : {n_lengkap}",
+        f"  TIDAK LENGKAP (pasti)      : {n_tidak_lengkap}",
+        f"  TAK PASTI (v-min≠v-maks)   : {n_tak_pasti}",
+        f"Abstrak diblokir             : {n_total_blokir}",
+        f"  BLOKIR-TT                  : {n_blokir_tt}",
+        f"  BLOKIR-BELUMSELESAI        : {n_blokir_pending}",
+        "",
+        "DEFINISI STATUS:",
+        "  LENGKAP       : v=(1,1,1,1,1), semua 5 komponen hadir (K4)",
+        "  TIDAK LENGKAP : ada komponen = 0 (K4)",
+        "  TAK PASTI     : v-min≠v-maks; tidak masuk metrik utama;",
+        "                  masuk analisis sensitivitas (K5)",
+        "  BLOKIR-TT     : label_akhir masih TT; adjudikasi wajib (K3)",
+        "  BLOKIR-BELUMSELESAI: ada segmen belum-selesai di GT",
         "",
         "CATATAN PENTING:",
-        "- Kelengkapan hanya mengukur kehadiran fungsi retoris sesuai definisi",
-        "  operasional penelitian, bukan mutu atau kualitas bahasa.",
-        "- Abstrak TAK PASTI dan BLOKIR-TT tidak masuk metrik utama.",
-        "- v-min = batas bawah; v-maks = batas atas (analisis sensitivitas K5).",
+        "  - Kelengkapan = kehadiran fungsi retoris, bukan mutu isi (6.1)",
+        "  - v-min = batas bawah; v-maks = batas atas (analisis sensitivitas)",
+        "  - Abstrak TAK PASTI, BLOKIR-TT, BLOKIR-BELUMSELESAI",
+        "    TIDAK masuk metrik utama (6.5)",
+        "  - Segmen dikecualikan: pembacaan ∅ membuat v-min = 0 (K5)",
         "",
         "PER JENIS STUDI:",
     ]
@@ -477,8 +581,10 @@ def main() -> None:
         total_js = sum(s.values())
         ringkasan_lines.append(
             f"  {js or '(tidak diketahui)':30s}: "
-            f"LENGKAP={s['LENGKAP']}, TIDAK LENGKAP={s['TIDAK LENGKAP']}, "
-            f"TAK PASTI={s['TAK PASTI']}, BLOKIR-TT={s['BLOKIR-TT']} (n={total_js})"
+            f"LENGKAP={s['LENGKAP']} TIDAK LENGKAP={s['TIDAK LENGKAP']} "
+            f"TAK PASTI={s['TAK PASTI']} "
+            f"BLOKIR-TT={s['BLOKIR-TT']} "
+            f"BLOKIR-BS={s['BLOKIR-BELUMSELESAI']} (n={total_js})"
         )
 
     ring_path = output_dir / "ringkasan_kelengkapan.txt"
