@@ -1,0 +1,10 @@
+﻿# PETUNJUK PENGISIAN:
+# id_abstrak   : kode unik, format A001-A999 (atau sesuai konvensi)
+# jenis_sumber : pdf_terbit ATAU halaman_artikel (pilih satu; 2.1 pedoman)
+# jenis_studi  : kuantitatif | kualitatif | campuran | pengembangan-produk | literatur | konseptual
+# peran_data   : data-pengembangan | pilot2 | korpus-anotasi
+# teks_mentah  : salin VERBATIM dari PDF/HTML; tidak boleh diubah setelah diisi
+# tanggal_akses: format YYYY-MM-DD
+# Kolom kosong  : isi dengan string kosong (dua koma berurutan), bukan spasi
+id_abstrak,judul,jurnal,tahun,volume_nomor,doi,url,jenis_sumber,versi_dokumen,tanggal_akses,jenis_studi,peran_data,teks_mentah,lisensi
+A001,"Judul artikel contoh","Nama Jurnal","2024","28(2)","10.xxxxx/xxxxx","https://...","pdf_terbit","versi terbit","2026-10-12","kuantitatif","korpus-anotasi","Teks abstrak verbatim dari PDF tanpa perubahan apa pun. Salin persis dari sumber.","CC BY 4.0"

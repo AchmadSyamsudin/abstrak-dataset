@@ -1,0 +1,248 @@
+﻿<View>
+  <!-- =========================================================
+       Konfigurasi Label Studio v1.0
+       Proyek: Anotasi Fungsi Retoris Abstrak Bahasa Indonesia
+       Pedoman: pedoman_v1.0_beku.md
+       Catatan: satu task = satu segmen kalimat
+  ========================================================= -->
+
+  <!-- Header: identitas segmen -->
+  <View style="background:#f0f4f8;padding:12px 16px;border-radius:8px;margin-bottom:12px;">
+    <Header value="Informasi Segmen" size="4"/>
+    <View style="display:flex;gap:24px;flex-wrap:wrap;">
+      <View>
+        <Text name="lbl_id_abstrak" value="ID Abstrak:"/>
+        <Text name="disp_id_abstrak" value="$id_abstrak" style="font-weight:bold;"/>
+      </View>
+      <View>
+        <Text name="lbl_id_segmen" value="ID Segmen:"/>
+        <Text name="disp_id_segmen" value="$id_segmen" style="font-weight:bold;"/>
+      </View>
+      <View>
+        <Text name="lbl_urutan" value="Urutan:"/>
+        <Text name="disp_urutan" value="$urutan_segmen" style="font-weight:bold;"/>
+      </View>
+      <View>
+        <Text name="lbl_total" value="dari"/>
+        <Text name="disp_total" value="$total_segmen" style="font-weight:bold;"/>
+      </View>
+      <View>
+        <Text name="lbl_peran" value="Peran Data:"/>
+        <Text name="disp_peran" value="$peran_data"/>
+      </View>
+    </View>
+  </View>
+
+  <!-- Segmen target -->
+  <View style="background:#fff3cd;border:2px solid #ffc107;border-radius:8px;padding:14px 16px;margin-bottom:12px;">
+    <Header value="Kalimat yang Dianotasi" size="4"/>
+    <Text name="teks_target" value="$teks_segmen" style="font-size:1.1em;line-height:1.7;font-weight:500;"/>
+  </View>
+
+  <!-- Konteks langsung -->
+  <View style="background:#e8f4f8;border-radius:8px;padding:12px 16px;margin-bottom:12px;">
+    <Header value="Konteks Langsung" size="4"/>
+    <View style="margin-bottom:6px;">
+      <Text name="lbl_prev" value="Sebelum:"/>
+      <Text name="disp_prev" value="$segmen_sebelum" style="color:#444;font-style:italic;"/>
+    </View>
+    <View>
+      <Text name="lbl_next" value="Sesudah:"/>
+      <Text name="disp_next" value="$segmen_sesudah" style="color:#444;font-style:italic;"/>
+    </View>
+  </View>
+
+  <!-- Teks kerja abstrak -->
+  <View style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:12px 16px;margin-bottom:16px;">
+    <Header value="Teks Kerja Abstrak (konteks wacana)" size="4"/>
+    <Text name="teks_abstrak" value="$teks_kerja_abstrak" style="line-height:1.75;color:#333;font-size:0.95em;"/>
+  </View>
+
+  <!-- FORM ANOTASI -->
+  <View style="background:#fff;border:1px solid #ced4da;border-radius:8px;padding:16px;margin-bottom:12px;">
+    <Header value="Form Anotasi" size="3"/>
+
+    <!-- Label 1 -->
+    <View style="margin-bottom:14px;">
+      <Header value="1. Label Utama (label_1) *" size="4"/>
+      <Text name="petunjuk_label1" value="Pilih satu label berdasarkan tes positif. Urutan tes: TJ -> MT -> HS -> SI -> LB -> LAINNYA."/>
+      <Choices name="label_1" toName="teks_target" choice="single" required="true" showInline="false">
+        <Choice value="LB" hint="Latar Belakang: konteks, masalah, kesenjangan, pengetahuan terdahulu (acuan D, status pra)"/>
+        <Choice value="TJ" hint="Tujuan: sasaran studi secara keseluruhan (acuan K, sasaran)"/>
+        <Choice value="MT" hint="Metode: cara, desain, subjek, bahan, instrumen, prosedur (acuan K, cara)"/>
+        <Choice value="HS" hint="Hasil: keluaran terikat data/subjek/produk/korpus studi, ada penambat A1-A5 (acuan X, terikat)"/>
+        <Choice value="SI" hint="Simpulan/Implikasi: melampaui data; generalisasi, makna, kontribusi, atau anjuran (acuan X, melampaui)"/>
+        <Choice value="LAINNYA" hint="Fungsi lain: segmen administratif, bukan proposisi isi, atau rusak (LN-1)"/>
+        <Choice value="TT" hint="Tidak Terputuskan: tidak ada tes positif yang lolos. WAJIB disertai flag B2 dan alasan."/>
+      </Choices>
+    </View>
+
+    <!-- Uji Pemecahan -->
+    <View style="margin-bottom:14px;border-top:1px solid #eee;padding-top:12px;">
+      <Header value="2. Uji Pemecahan (uji_pemecahan) *" size="4"/>
+      <Choices name="uji_pemecahan" toName="teks_target" choice="single" required="true" showInline="true">
+        <Choice value="Ya"/>
+        <Choice value="Tidak"/>
+      </Choices>
+    </View>
+
+    <!-- Pemicu UP -->
+    <View style="margin-bottom:14px;">
+      <Header value="3. Pemicu Uji Pemecahan (pemicu_up)" size="4"/>
+      <Text name="petunjuk_pemicu" value="Isi HANYA jika Uji Pemecahan = Ya. Pemicu tertutup:"/>
+      <Choices name="pemicu_up" toName="teks_target" choice="multiple" showInline="false">
+        <Choice value="U1" hint="Dua klausa/predikat setara: koordinasi, titik koma, tanda pisah, atau butir daftar bernomor dalam satu kalimat"/>
+        <Choice value="U2" hint="Adjunct tujuan pada klausa utama kegiatan studi (K) yang menyatakan tujuan studi"/>
+        <Choice value="U3" hint="Adjunct cara, sarana, atau sumber data yang menyatakan desain, teknik, atau data studi"/>
+        <Choice value="U4" hint="Adjunct akibat/turunan yang menyatakan makna atau anjuran"/>
+        <Choice value="U5" hint="Klausa sebab/alasan di luar cakupan bingkai studi ini"/>
+      </Choices>
+    </View>
+
+    <!-- Label ganda 2-6 -->
+    <View style="margin-bottom:14px;background:#f8fff8;border:1px dashed #28a745;border-radius:6px;padding:12px;">
+      <Header value="4. Label Ganda (label_2 ... label_6)" size="4"/>
+      <Text name="petunjuk_ganda" value="Isi HANYA jika UP=Ya dan ada bagian dengan fungsi berbeda. Urutan sesuai kemunculan dalam segmen."/>
+      <View style="margin-bottom:8px;">
+        <Text name="lbl_l2" value="label_2:"/>
+        <Choices name="label_2" toName="teks_target" choice="single" showInline="true">
+          <Choice value="(kosong)"/>
+          <Choice value="LB"/>
+          <Choice value="TJ"/>
+          <Choice value="MT"/>
+          <Choice value="HS"/>
+          <Choice value="SI"/>
+          <Choice value="LAINNYA"/>
+          <Choice value="TT"/>
+        </Choices>
+      </View>
+      <View style="margin-bottom:8px;">
+        <Text name="lbl_l3" value="label_3:"/>
+        <Choices name="label_3" toName="teks_target" choice="single" showInline="true">
+          <Choice value="(kosong)"/>
+          <Choice value="LB"/>
+          <Choice value="TJ"/>
+          <Choice value="MT"/>
+          <Choice value="HS"/>
+          <Choice value="SI"/>
+          <Choice value="LAINNYA"/>
+          <Choice value="TT"/>
+        </Choices>
+      </View>
+      <View style="margin-bottom:8px;">
+        <Text name="lbl_l4" value="label_4:"/>
+        <Choices name="label_4" toName="teks_target" choice="single" showInline="true">
+          <Choice value="(kosong)"/>
+          <Choice value="LB"/>
+          <Choice value="TJ"/>
+          <Choice value="MT"/>
+          <Choice value="HS"/>
+          <Choice value="SI"/>
+          <Choice value="LAINNYA"/>
+          <Choice value="TT"/>
+        </Choices>
+      </View>
+      <View style="margin-bottom:8px;">
+        <Text name="lbl_l5" value="label_5:"/>
+        <Choices name="label_5" toName="teks_target" choice="single" showInline="true">
+          <Choice value="(kosong)"/>
+          <Choice value="LB"/>
+          <Choice value="TJ"/>
+          <Choice value="MT"/>
+          <Choice value="HS"/>
+          <Choice value="SI"/>
+          <Choice value="LAINNYA"/>
+          <Choice value="TT"/>
+        </Choices>
+      </View>
+      <View>
+        <Text name="lbl_l6" value="label_6:"/>
+        <Choices name="label_6" toName="teks_target" choice="single" showInline="true">
+          <Choice value="(kosong)"/>
+          <Choice value="LB"/>
+          <Choice value="TJ"/>
+          <Choice value="MT"/>
+          <Choice value="HS"/>
+          <Choice value="SI"/>
+          <Choice value="LAINNYA"/>
+          <Choice value="TT"/>
+        </Choices>
+      </View>
+    </View>
+
+    <!-- Label alternatif -->
+    <View style="margin-bottom:14px;border-top:1px solid #eee;padding-top:12px;">
+      <Header value="5. Label Alternatif (label_alt)" size="4"/>
+      <Text name="petunjuk_alt" value="Maks. dua alternatif, dipisah titik koma (contoh: HS;LB). Kosongkan jika tidak ada."/>
+      <TextArea name="label_alt" toName="teks_target" placeholder="Contoh: HS;LB" rows="1" maxSubmissions="1"/>
+    </View>
+
+    <!-- Simpul penentu -->
+    <View style="margin-bottom:14px;border-top:1px solid #eee;padding-top:12px;">
+      <Header value="6. Simpul Penentu (simpul_penentu) *" size="4"/>
+      <Text name="petunjuk_simpul" value="Catat tes dan/atau aturan yang menentukan keputusan sesuai pedoman. Contoh: TJ-1;TJ-2;U3"/>
+      <TextArea name="simpul_penentu" toName="teks_target" placeholder="Contoh: TJ-1;TJ-2 atau MT-1;MT-2;MT-3;U3" rows="1" required="true" maxSubmissions="1"/>
+    </View>
+
+    <!-- Flag kasus batas -->
+    <View style="margin-bottom:14px;border-top:1px solid #eee;padding-top:12px;">
+      <Header value="7. Flag Kasus Batas (flag)" size="4"/>
+      <Text name="petunjuk_flag" value="Pilih semua flag yang berlaku. Bila ada flag, alasan WAJIB diisi."/>
+      <Choices name="flag" toName="teks_target" choice="multiple" showInline="false">
+        <Choice value="B1" hint="Dua tes atau lebih lolos. Label utama: paling awal dalam urutan tes; label lain jadi alternatif."/>
+        <Choice value="B2" hint="Tidak ada tes positif yang lolos. Gunakan TT sebagai label sementara."/>
+        <Choice value="B3" hint="Status pra/pasca belum pasti: LB-2 hanya bertumpu pada ketiadaan PP dengan tanda D lemah, atau antesedens tidak dapat ditentukan."/>
+        <Choice value="B4" hint="Dua penulisan ulang UP yang sama-sama sah menghasilkan label berbeda. Label utama inklusif."/>
+        <Choice value="B5" hint="Keraguan segmentasi: tiga label atau lebih, segmen terpotong, daftar tanpa induk, atau batas meragukan."/>
+        <Choice value="B6" hint="Ambang tes dapat dibaca dua arah: penambat, pelampauan, kekhasan, atau perolehan vs. pelaksanaan tidak tegas."/>
+      </Choices>
+    </View>
+
+    <!-- Alasan -->
+    <View style="margin-bottom:14px;">
+      <Header value="8. Alasan (alasan)" size="4"/>
+      <Text name="petunjuk_alasan" value="Wajib diisi dengan satu kalimat jika ada flag. Jelaskan mengapa flag diberikan."/>
+      <TextArea name="alasan" toName="teks_target" placeholder="Contoh: B6 karena predikat dapat dibaca sebagai pelaksanaan atau perolehan." rows="2" maxSubmissions="1"/>
+    </View>
+
+    <!-- Kohesi PP-2 -->
+    <View style="margin-bottom:14px;background:#fff8f0;border:1px dashed #fd7e14;border-radius:6px;padding:12px;">
+      <Header value="9. Kohesi PP-2 (opsional, hanya untuk audit)" size="4"/>
+      <Text name="petunjuk_pp2" value="Isi HANYA jika PP-2 digunakan. Field ini hanya untuk audit kohesi, tidak mengubah skema anotasi.csv."/>
+      <View style="margin-bottom:6px;">
+        <Text name="lbl_ant_id" value="ID segmen anteseden:"/>
+        <TextArea name="pp2_id_antesedens" toName="teks_target" placeholder="Contoh: A001-S03" rows="1" maxSubmissions="1"/>
+      </View>
+      <View>
+        <Text name="lbl_ant_label" value="Label anteseden:"/>
+        <TextArea name="pp2_label_antesedens" toName="teks_target" placeholder="Contoh: HS" rows="1" maxSubmissions="1"/>
+      </View>
+    </View>
+
+    <!-- Metadata anotator -->
+    <View style="border-top:1px solid #eee;padding-top:12px;">
+      <Header value="10. Metadata Anotasi" size="4"/>
+      <View style="display:flex;gap:16px;flex-wrap:wrap;">
+        <View>
+          <Text name="lbl_annotator" value="Anotator ID *:"/>
+          <TextArea name="anotator_id" toName="teks_target" placeholder="Contoh: an1" rows="1" required="true" maxSubmissions="1"/>
+        </View>
+        <View>
+          <Text name="lbl_versi" value="Versi Pedoman:"/>
+          <Text name="disp_versi" value="v1.0"/>
+        </View>
+      </View>
+    </View>
+  </View>
+
+  <!-- Pengingat -->
+  <View style="background:#e7f3ff;border:1px solid #b3d7ff;border-radius:8px;padding:12px 16px;margin-top:8px;font-size:0.85em;">
+    <Header value="Pengingat Pedoman" size="5"/>
+    <Text name="hint1" value="Urutan tes positif: TJ -> MT -> HS -> SI -> LB -> LAINNYA (bukan if-else)."/>
+    <Text name="hint2" value="Label ganda hanya sah melalui UP (U1-U5). Jangan memecah karena klausa relatif, syarat, konsesi, atau sebab di dalam cakupan."/>
+    <Text name="hint3" value="TT selalu harus disertai B2 dan alasan. Jangan ganti TT dengan LAINNYA atau LB."/>
+    <Text name="hint4" value="Tiga label atau lebih wajib disertai B5."/>
+    <Text name="hint5" value="Label alternatif maks. dua; tidak sama dengan label ganda."/>
+  </View>
+
+</View>

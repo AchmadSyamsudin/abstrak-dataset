@@ -1,0 +1,23 @@
+# Dependensi sistem anotasi fungsi retoris abstrak
+# Gunakan: pip install -r requirements.txt
+
+# Pemrosesan data
+pandas>=2.0.0
+
+# Hashing dan kriptografi (sudah ada di stdlib Python, tidak perlu install)
+# hashlib - bawaan Python
+
+# Unit test (bawaan Python)
+# unittest - bawaan Python
+
+# Logging (bawaan Python)
+# logging - bawaan Python
+
+# CSV dan JSON (bawaan Python)
+# csv, json - bawaan Python
+
+# Keamanan dan environment variable
+python-dotenv>=1.0.0
+
+# Opsional: Label Studio SDK untuk integrasi API (tidak wajib, ada alur manual)
+# label-studio-sdk>=0.0.32

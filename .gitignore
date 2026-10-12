@@ -1,0 +1,29 @@
+# Python cache and tooling
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtual environments
+.venv/
+venv/
+env/
+
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+
+# Generated pipeline outputs
+data/exports/*
+data/labelstudio/*
+data/processed/*
+data/raw/*
+!data/exports/.gitkeep
+!data/labelstudio/.gitkeep
+!data/processed/.gitkeep
+!data/raw/.gitkeep
