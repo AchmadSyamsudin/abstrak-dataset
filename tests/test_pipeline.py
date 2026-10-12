@@ -13,7 +13,7 @@ PRINSIP (TIDAK BOLEH DILANGGAR):
 - Integration test menggunakan direktori sementara yang terisolasi.
 - Test tidak menganggap lulus jika fungsi produksi belum dipanggil.
 
-KELOMPOK TEST (total 107 test):
+KELOMPOK TEST (total 110 test):
  1. TestNormalisasi              - normalisasi minimal (prepare_abstrak.py)
  2. TestDeduplikasi              - dedup DOI/hash/Jaccard
  3. TestValidasiPrepareFatal     - fatal errors menghentikan pipeline
@@ -1684,7 +1684,7 @@ class TestPrepareLabelStudioTasks(unittest.TestCase):
             writer.writerows(rows)
 
     def test_prepare_tasks_segmen_tidak_beku_fatal(self):
-        """Segmen yang belum dibekukan (misal: 'draft') di korpus target harus menghentikan proses dengan nonzero code."""
+        """Segmen yang belum dibekukan (misal: 'draft') di korpus target harus menampilkan id_abstrak, id_segmen, dan status, lalu exit nonzero."""
         import subprocess
         abs_path = self.tmp / "abstrak.csv"
         seg_path = self.tmp / "segmen.csv"
@@ -1710,7 +1710,22 @@ class TestPrepareLabelStudioTasks(unittest.TestCase):
             capture_output=True, text=True
         )
         self.assertNotEqual(res.returncode, 0, "Harus gagal jika ada segmen belum dibekukan")
-        self.assertIn("FATAL", res.stderr + res.stdout)
+        output = res.stderr + res.stdout
+        self.assertIn("FATAL", output)
+        self.assertIn("TEST_A01", output)
+        self.assertIn("TEST_A01-S02", output)
+        self.assertIn("draft", output)
+
+    def test_load_segmen_belum_beku_exit_nonzero(self):
+        """Fungsi load_segmen() langsung menampilkan segmen belum disetujui dan exit nonzero."""
+        from prepare_labelstudio_tasks import load_segmen
+        seg_path = self.tmp / "segmen_unapproved.csv"
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [{"id_abstrak": "TEST_A99", "id_segmen": "TEST_A99-S01", "urutan": "1", "teks_segmen": "Teks.", "status_beku": "belum-disetujui"}]
+        )
+        with self.assertRaises(SystemExit):
+            load_segmen(seg_path)
 
     def test_prepare_tasks_zero_tasks_exit_nonzero(self):
         """Jika tidak ada segmen yang sesuai peran_data, harus exit nonzero."""
@@ -1764,6 +1779,51 @@ class TestPrepareLabelStudioTasks(unittest.TestCase):
             capture_output=True, text=True
         )
         self.assertNotEqual(res.returncode, 0, "Harus exit nonzero jika ID segmen duplikat")
+
+    def test_prepare_tasks_duplikat_id_abstrak_fatal(self):
+        """Duplikat ID abstrak di abstrak.csv harus menghentikan proses dengan nonzero exit code."""
+        import subprocess
+        abs_path = self.tmp / "abstrak.csv"
+        seg_path = self.tmp / "segmen.csv"
+        out_dir = self.tmp / "out"
+
+        self._write_csv(abs_path,
+            ["id_abstrak", "judul", "jurnal", "tahun", "jenis_studi", "peran_data", "teks_kerja"],
+            [
+                {"id_abstrak": "TEST_A01", "judul": "J1", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "korpus-anotasi", "teks_kerja": "Teks 1"},
+                {"id_abstrak": "TEST_A01", "judul": "J2", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "korpus-anotasi", "teks_kerja": "Teks 2"},
+            ]
+        )
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S01", "urutan": "1", "teks_segmen": "Teks 1.", "status_beku": "disetujui"}]
+        )
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "prepare_labelstudio_tasks.py"),
+             "--abstrak", str(abs_path), "--segmen", str(seg_path),
+             "--peran-data", "korpus-anotasi",
+             "--anotator-ids", "an1,an2",
+             "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertNotEqual(res.returncode, 0, "Harus exit nonzero jika ID abstrak duplikat")
+        output = res.stderr + res.stdout
+        self.assertIn("FATAL", output)
+        self.assertIn("duplikat", output.lower())
+
+    def test_load_abstrak_duplikat_exit_nonzero(self):
+        """Fungsi load_abstrak() langsung memblokir duplikasi ID abstrak dan exit nonzero."""
+        from prepare_labelstudio_tasks import load_abstrak
+        abs_path = self.tmp / "abstrak_dup.csv"
+        self._write_csv(abs_path,
+            ["id_abstrak", "judul", "jurnal", "tahun", "jenis_studi", "peran_data", "teks_kerja"],
+            [
+                {"id_abstrak": "TEST_DUP01", "judul": "J1", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "korpus-anotasi", "teks_kerja": "Teks 1"},
+                {"id_abstrak": "TEST_DUP01", "judul": "J2", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "korpus-anotasi", "teks_kerja": "Teks 2"},
+            ]
+        )
+        with self.assertRaises(SystemExit):
+            load_abstrak(abs_path)
 
     def test_prepare_tasks_id_abstrak_tidak_dikenal_fatal(self):
         """ID abstrak di segmen.csv yang tidak ada di abstrak.csv harus menghentikan proses."""

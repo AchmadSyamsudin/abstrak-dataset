@@ -302,7 +302,7 @@ python tests\test_pipeline.py
 python -m pytest tests\test_pipeline.py -v
 ```
 
-**Hasil terakhir: 107 test, 107 lulus, 0 gagal, 0 dilewati.**
+**Hasil terakhir: 110 test, 110 lulus, 0 gagal, 0 dilewati.**
 
 | Kelompok | Jumlah | Cakupan |
 |---|---|---|
@@ -325,7 +325,7 @@ python -m pytest tests\test_pipeline.py -v
 | `TestKelengkapanStatusAndLabelValidation` | 7 | Validasi status_akhir, label_akhir kosong/invalid, dikecualikan K3/K5 |
 | `TestConvertLabelStudioAnotatorPriorityAndErrors` | 3 | CLI anotator-id priority, validasi label kosong/invalid |
 | `TestValidateAnnotationsHardening` | 4 | Exit code nonzero pada ERROR, label kosong, adjudikasi ganda |
-| `TestPrepareLabelStudioTasks` | 5 | Segmen tidak beku fatal, 0 tasks exit nonzero, duplikat/yatim, konsistensi 1-to-1 |
+| `TestPrepareLabelStudioTasks` | 8 | Segmen tidak beku fatal, 0 tasks exit nonzero, duplikat ID abstrak/segmen, konsistensi 1-to-1 |
 
 ---
 
@@ -362,7 +362,7 @@ Label dataset/
 │   ├── build_ground_truth.py            # Ground truth lengkap (konsensus + adj)
 │   └── calculate_completeness.py        # Kelengkapan dari ground_truth.csv (K1–K8)
 ├── tests/
-│   └── test_pipeline.py                 # 107 test (20 kelompok, semua fungsi produksi)
+│   └── test_pipeline.py                 # 110 test (20 kelompok, semua fungsi produksi)
 ├── pedoman_v1.0_beku.md                 # Pedoman Anotasi v1.0 (JANGAN DIUBAH)
 ├── requirements.txt
 └── README.md

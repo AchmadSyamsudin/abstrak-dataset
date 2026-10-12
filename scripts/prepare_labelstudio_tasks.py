@@ -54,12 +54,35 @@ logger = logging.getLogger("prepare_labelstudio_tasks")
 # ---------------------------------------------------------------------------
 
 def load_abstrak(path: Path) -> Dict[str, Dict]:
-    """Muat abstrak.csv ke dict id_abstrak -> row."""
+    """Muat abstrak.csv ke dict id_abstrak -> row.
+    Mendeteksi duplikasi ID abstrak dan menghentikan proses dengan kode keluar nonzero.
+    """
     abstrak_map: Dict[str, Dict] = {}
+    seen_ids: Set[str] = set()
+    n_dup = 0
+
     with open(path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            abstrak_map[row["id_abstrak"]] = row
+            aid = row.get("id_abstrak", "").strip()
+            if not aid:
+                continue
+            if aid in seen_ids:
+                logger.error(
+                    f"FATAL: ID abstrak duplikat ditemukan di abstrak.csv: '{aid}'"
+                )
+                n_dup += 1
+                continue
+            seen_ids.add(aid)
+            abstrak_map[aid] = row
+
+    if n_dup > 0:
+        logger.error(
+            f"FATAL: Ditemukan {n_dup} ID abstrak duplikat di {path}. "
+            "Pipeline dihentikan."
+        )
+        sys.exit(1)
+
     return abstrak_map
 
 
@@ -67,29 +90,57 @@ def load_segmen(path: Path) -> Tuple[Dict[str, List[Dict]], int]:
     """
     Muat segmen.csv ke dict id_abstrak -> list segmen (urut).
     Memeriksa keunikan ID segmen (ID duplikat dihitung sebagai fatal).
+    Memeriksa status_beku: jika ada segmen belum disetujui/dibekukan,
+    tampilkan ID abstrak, ID segmen, dan statusnya, lalu hentikan proses.
     Return: (segmen_map, n_duplikat)
     """
     segmen_map: Dict[str, List[Dict]] = {}
     seen_ids: Set[str] = set()
     n_dup = 0
+    unapproved: List[Tuple[str, str, str]] = []
 
     with open(path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             sid = row.get("id_segmen", "").strip()
+            aid = row.get("id_abstrak", "").strip()
+            st = row.get("status_beku", "").strip()
             if not sid:
                 continue
+
             if sid in seen_ids:
                 logger.error(f"FATAL: ID segmen duplikat di segmen.csv: '{sid}'")
                 n_dup += 1
             seen_ids.add(sid)
 
-            id_abstrak = row.get("id_abstrak", "").strip()
-            segmen_map.setdefault(id_abstrak, []).append(row)
+            if st.lower() not in ("disetujui", "beku"):
+                unapproved.append((aid, sid, st))
+
+            segmen_map.setdefault(aid, []).append(row)
 
     # Urutkan segmen per abstrak berdasarkan urutan
     for id_abstrak in segmen_map:
         segmen_map[id_abstrak].sort(key=lambda r: int(r.get("urutan", 0)))
+
+    # Jika ada segmen yang belum disetujui, tampilkan ID abstrak, ID segmen, dan statusnya, lalu hentikan proses
+    if unapproved:
+        for aid, sid, st in unapproved:
+            logger.error(
+                f"FATAL: Segmen belum disetujui/dibekukan: "
+                f"id_abstrak='{aid}', id_segmen='{sid}', status_beku='{st}'"
+            )
+        logger.error(
+            f"FATAL: Ditemukan {len(unapproved)} segmen belum disetujui/dibekukan di {path}. "
+            "Pipeline dihentikan."
+        )
+        sys.exit(1)
+
+    if n_dup > 0:
+        logger.error(
+            f"FATAL: Ditemukan {n_dup} ID segmen duplikat di segmen.csv. "
+            "Pipeline dihentikan."
+        )
+        sys.exit(1)
 
     return segmen_map, n_dup
 
@@ -390,6 +441,15 @@ def main() -> None:
             )
             sys.exit(1)
 
+        if len(task_seg_ids) != len(set(task_seg_ids)):
+            from collections import Counter
+            counts = Counter(task_seg_ids)
+            dups = [sid for sid, c in counts.items() if c > 1]
+            logger.error(
+                f"FATAL: Segmen duplikat ditemukan dalam task anotator '{anotator_id}': {dups}."
+            )
+            sys.exit(1)
+
         # Tentukan nama file output
         suffix = f"_{args.peran_data}" if args.peran_data else ""
         out_path = output_dir / f"tasks_{anotator_id}{suffix}.json"
@@ -397,7 +457,18 @@ def main() -> None:
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(tasks, f, ensure_ascii=False, indent=2)
 
-        logger.info(f"Task disimpan: {out_path} ({len(tasks)} task)")
+        # Setelah pembuatan task, bandingkan ID segmen yang diharapkan dengan ID segmen dalam setiap JSON keluaran
+        with open(out_path, "r", encoding="utf-8") as f:
+            saved_tasks = json.load(f)
+        saved_seg_ids = [t["data"]["id_segmen"] for t in saved_tasks]
+        if sorted(saved_seg_ids) != sorted(expected_seg_ids) or len(saved_seg_ids) != len(expected_seg_ids):
+            logger.error(
+                f"FATAL: Verifikasi berkas JSON keluaran '{out_path}' gagal. "
+                "ID segmen dalam JSON tidak sesuai dengan segmen yang diharapkan."
+            )
+            sys.exit(1)
+
+        logger.info(f"Task disimpan dan diverifikasi: {out_path} ({len(tasks)} task)")
 
     # Simpan seed info
     seed_path = output_dir / "seed_info.json"
