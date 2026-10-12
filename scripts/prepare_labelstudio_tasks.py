@@ -36,9 +36,10 @@ import csv
 import json
 import logging
 import random
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,39 +63,35 @@ def load_abstrak(path: Path) -> Dict[str, Dict]:
     return abstrak_map
 
 
-def load_segmen(path: Path, peran_filter: Optional[str] = None) -> Dict[str, List[Dict]]:
+def load_segmen(path: Path) -> Tuple[Dict[str, List[Dict]], int]:
     """
     Muat segmen.csv ke dict id_abstrak -> list segmen (urut).
-    Hanya segmen dengan status_beku = 'disetujui' yang diproses.
+    Memeriksa keunikan ID segmen (ID duplikat dihitung sebagai fatal).
+    Return: (segmen_map, n_duplikat)
     """
     segmen_map: Dict[str, List[Dict]] = {}
-    n_total = 0
-    n_skip = 0
+    seen_ids: Set[str] = set()
+    n_dup = 0
 
     with open(path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            # Periksa status pembekuan
-            status = row.get("status_beku", "").strip().lower()
-            if status not in ("disetujui", "beku"):
-                n_skip += 1
+            sid = row.get("id_segmen", "").strip()
+            if not sid:
                 continue
+            if sid in seen_ids:
+                logger.error(f"FATAL: ID segmen duplikat di segmen.csv: '{sid}'")
+                n_dup += 1
+            seen_ids.add(sid)
 
-            id_abstrak = row["id_abstrak"]
+            id_abstrak = row.get("id_abstrak", "").strip()
             segmen_map.setdefault(id_abstrak, []).append(row)
-            n_total += 1
 
     # Urutkan segmen per abstrak berdasarkan urutan
     for id_abstrak in segmen_map:
         segmen_map[id_abstrak].sort(key=lambda r: int(r.get("urutan", 0)))
 
-    if n_skip > 0:
-        logger.warning(
-            f"{n_skip} segmen dilewati karena belum berstatus 'disetujui'/'beku'. "
-            "Jalankan pemeriksaan segmentasi dan bekukan terlebih dahulu."
-        )
-    logger.info(f"Dimuat {n_total} segmen dari {len(segmen_map)} abstrak.")
-    return segmen_map
+    return segmen_map, n_dup
 
 
 # ---------------------------------------------------------------------------
@@ -116,10 +113,6 @@ def filter_by_peran(
         if row.get("peran_data", "") == peran_filter:
             filtered[id_abstrak] = segs
 
-    logger.info(
-        f"Filter peran_data='{peran_filter}': "
-        f"{len(filtered)}/{len(segmen_map)} abstrak."
-    )
     return filtered
 
 
@@ -268,28 +261,91 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    abstrak_path = Path(args.abstrak)
+    segmen_path = Path(args.segmen)
+
+    if not abstrak_path.exists():
+        logger.error(f"FATAL: File abstrak tidak ditemukan: {abstrak_path}")
+        sys.exit(1)
+
+    if not segmen_path.exists():
+        logger.error(f"FATAL: File segmen tidak ditemukan: {segmen_path}")
+        sys.exit(1)
+
     # Load data
-    abstrak_map = load_abstrak(Path(args.abstrak))
-    segmen_map = load_segmen(Path(args.segmen))
+    abstrak_map = load_abstrak(abstrak_path)
+    segmen_map, n_dup = load_segmen(segmen_path)
 
-    if not segmen_map:
+    # Hentikan jika terdapat ID segmen duplikat
+    if n_dup > 0:
         logger.error(
-            "Tidak ada segmen yang ditemukan. "
-            "Pastikan segmen.csv ada dan segmen sudah berstatus 'disetujui'."
+            f"FATAL: Ditemukan {n_dup} ID segmen duplikat di segmen.csv. "
+            "Pipeline dihentikan."
         )
-        return
+        sys.exit(1)
 
-    # Filter peran
-    segmen_map = filter_by_peran(segmen_map, abstrak_map, args.peran_data)
+    # Periksa ID abstrak yang tidak ditemukan dalam metadata abstrak
+    unknown_abstrak = set()
+    for aid in segmen_map:
+        if aid not in abstrak_map:
+            unknown_abstrak.add(aid)
 
-    if not segmen_map:
+    if unknown_abstrak:
         logger.error(
-            f"Tidak ada abstrak dengan peran_data='{args.peran_data}'. "
-            "Periksa filter dan isi abstrak.csv."
+            f"FATAL: Ditemukan {len(unknown_abstrak)} ID abstrak pada segmen.csv "
+            f"yang tidak terdaftar di abstrak.csv: {sorted(unknown_abstrak)}. "
+            "Pipeline dihentikan."
         )
-        return
+        sys.exit(1)
+
+    n_abstrak_sebelum = len(segmen_map)
+    n_segmen_sebelum = sum(len(segs) for segs in segmen_map.values())
+
+    # Filter peran_data
+    filtered_map = filter_by_peran(segmen_map, abstrak_map, args.peran_data)
+    n_abstrak_sesudah = len(filtered_map)
+    n_segmen_sesudah = sum(len(segs) for segs in filtered_map.values())
+
+    # Laporkan jumlah abstrak dan segmen sebelum serta sesudah filter peran_data
+    logger.info(
+        f"Jumlah sebelum filter peran_data: {n_abstrak_sebelum} abstrak, {n_segmen_sebelum} segmen."
+    )
+    logger.info(
+        f"Jumlah sesudah filter peran_data='{args.peran_data or 'semua'}': "
+        f"{n_abstrak_sesudah} abstrak, {n_segmen_sesudah} segmen."
+    )
+
+    # Hentikan dengan kode nonzero jika tidak ada task yang dihasilkan
+    if n_abstrak_sesudah == 0 or n_segmen_sesudah == 0:
+        logger.error(
+            "FATAL: Tidak ada segmen yang memenuhi syarat peran_data. "
+            f"Tidak ada task yang dihasilkan untuk peran_data='{args.peran_data}'. "
+            "Pipeline dihentikan."
+        )
+        sys.exit(1)
+
+    # Hentikan pembuatan task jika ada segmen yang belum dibekukan dalam korpus yang akan diimpor
+    unfrozen_segments = []
+    for aid, segs in filtered_map.items():
+        for seg in segs:
+            st = seg.get("status_beku", "").strip().lower()
+            if st not in ("disetujui", "beku"):
+                unfrozen_segments.append(seg.get("id_segmen", ""))
+
+    if unfrozen_segments:
+        logger.error(
+            f"FATAL: Ditemukan {len(unfrozen_segments)} segmen yang belum dibekukan "
+            f"(status_beku bukan 'disetujui'/'beku') dalam korpus yang akan diimpor: "
+            f"{unfrozen_segments[:10]}. Seluruh segmen korpus wajib dibekukan. "
+            "Hentikan pembuatan task."
+        )
+        sys.exit(1)
 
     anotator_ids = [a.strip() for a in args.anotator_ids.split(",") if a.strip()]
+    if not anotator_ids:
+        logger.error("FATAL: Parameter --anotator-ids tidak boleh kosong.")
+        sys.exit(1)
+
     seed_info = {
         "seed_dasar": args.seed,
         "tanggal": datetime.now(timezone.utc).isoformat(),
@@ -297,18 +353,42 @@ def main() -> None:
         "anotator_seeds": {},
     }
 
+    expected_seg_ids = [s["id_segmen"] for segs in filtered_map.values() for s in segs]
+
     for i, anotator_id in enumerate(anotator_ids):
-        # Setiap anotator mendapat seed berbeda (seed_dasar + indeks)
-        # agar urutan abstrak berbeda antar anotator
         anotator_seed = args.seed + i * 1000
         seed_info["anotator_seeds"][anotator_id] = anotator_seed
 
         tasks = build_tasks_for_annotator(
-            segmen_map=segmen_map,
+            segmen_map=filtered_map,
             abstrak_map=abstrak_map,
             anotator_id=anotator_id,
             seed=anotator_seed,
         )
+
+        if not tasks:
+            logger.error(
+                f"FATAL: Tidak ada task yang dihasilkan untuk anotator '{anotator_id}'."
+            )
+            sys.exit(1)
+
+        # Pastikan semua segmen beku dari abstrak yang dipilih terwakili tepat satu kali per anotator
+        task_seg_ids = [t["data"]["id_segmen"] for t in tasks]
+        if len(task_seg_ids) != len(expected_seg_ids):
+            logger.error(
+                f"FATAL: Jumlah task ({len(task_seg_ids)}) tidak sama dengan "
+                f"jumlah segmen beku ({len(expected_seg_ids)}) untuk anotator '{anotator_id}'."
+            )
+            sys.exit(1)
+
+        if set(task_seg_ids) != set(expected_seg_ids):
+            missing = set(expected_seg_ids) - set(task_seg_ids)
+            extra = set(task_seg_ids) - set(expected_seg_ids)
+            logger.error(
+                f"FATAL: Verifikasi identitas segmen gagal untuk anotator '{anotator_id}'. "
+                f"Hilang: {missing}, Lebih: {extra}."
+            )
+            sys.exit(1)
 
         # Tentukan nama file output
         suffix = f"_{args.peran_data}" if args.peran_data else ""
@@ -317,7 +397,7 @@ def main() -> None:
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(tasks, f, ensure_ascii=False, indent=2)
 
-        logger.info(f"Task disimpan: {out_path}")
+        logger.info(f"Task disimpan: {out_path} ({len(tasks)} task)")
 
     # Simpan seed info
     seed_path = output_dir / "seed_info.json"

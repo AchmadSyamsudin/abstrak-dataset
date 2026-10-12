@@ -328,9 +328,21 @@ def compute_completeness(
             blk["catatan"].append(msg)
             continue
 
-        # 3. Validasi label_akhir - kode tidak valid diblokir (tidak silent-ignore)
+        # 3. Validasi label_akhir - status final dan batas-sisa WAJIB memiliki label_akhir yang valid
         label_set = parse_labels(label_akhir_raw)
-        if label_akhir_raw and label_set:
+        if status in ("final", "batas-sisa"):
+            if not label_akhir_raw.strip() or not label_set:
+                comp.has_pending_segments = True
+                msg = (
+                    f"{id_segmen}: status='{status}' tetapi label_akhir KOSONG. "
+                    "Label akhir wajib terisi untuk status final dan batas-sisa. Abstrak diblokir."
+                )
+                comp.catatan.append(msg)
+                if blk["status_blokir"] not in ("BLOKIR-TT",):
+                    blk["status_blokir"] = "BLOKIR-INVALID"
+                blk["catatan"].append(msg)
+                continue
+
             invalid_labels = label_set - VALID_LABELS_SEMUA
             if invalid_labels:
                 comp.has_pending_segments = True
@@ -344,9 +356,26 @@ def compute_completeness(
                 blk["catatan"].append(msg)
                 continue
 
+        elif status == "dikecualikan":
+            # Status dikecualikan: label_akhir boleh kosong per Pedoman 7.4.
+            # Bila terisi, kode harus valid.
+            if label_akhir_raw.strip() and label_set:
+                invalid_labels = label_set - VALID_LABELS_SEMUA
+                if invalid_labels:
+                    comp.has_pending_segments = True
+                    msg = (
+                        f"{id_segmen}: status='dikecualikan' tetapi label_akhir mengandung kode tidak valid: "
+                        f"{sorted(invalid_labels)}. Abstrak diblokir."
+                    )
+                    comp.catatan.append(msg)
+                    if blk["status_blokir"] not in ("BLOKIR-TT",):
+                        blk["status_blokir"] = "BLOKIR-INVALID"
+                    blk["catatan"].append(msg)
+                    continue
+
         # 4. Validasi label_alt_sisa - kode tidak valid diblokir
         if label_alt_raw:
-            alt_parts = {l.strip() for part in label_alt_raw.split(";")
+            alt_parts = {l.strip() for part in label_alt_raw.replace(",", ";").split(";")
                          for l in part.split("+") if l.strip()}
             invalid_alt = alt_parts - VALID_LABELS_SEMUA
             if invalid_alt:
@@ -376,18 +405,19 @@ def compute_completeness(
         # 6. Dikecualikan: tidak menyumbang v utama (K3), tetapi menyumbang v-min/v-maks (K5)
         if status == "dikecualikan":
             comp.catatan.append(f"{id_segmen}: dikecualikan (K3).")
-            readings = get_segment_readings("", label_alt_raw, "dikecualikan")
+            readings = get_segment_readings(label_akhir_raw, label_alt_raw, "dikecualikan")
             comp.update_from_segment(readings, "dikecualikan")
             continue
 
-        # 7. LAINNYA / label kosong: tidak menyumbang apapun
-        if label_set == {"LAINNYA"} or not label_set:
-            comp.catatan.append(f"{id_segmen}: LAINNYA/kosong, tidak menyumbang.")
+        # 7. LAINNYA: tidak menyumbang komponen utama (K3)
+        if label_set == {"LAINNYA"}:
+            comp.catatan.append(f"{id_segmen}: LAINNYA, tidak menyumbang komponen utama.")
+            readings = get_segment_readings(label_akhir_raw, label_alt_raw, status)
+            comp.update_from_segment(readings, status)
             continue
 
         # 8. Normal (final atau batas-sisa): update v, v-min, v-maks
         readings = get_segment_readings(label_akhir_raw, label_alt_raw, status)
-
         comp.update_from_segment(readings, status)
 
     return results, blocked

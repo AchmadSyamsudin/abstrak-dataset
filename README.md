@@ -302,13 +302,13 @@ python tests\test_pipeline.py
 python -m pytest tests\test_pipeline.py -v
 ```
 
-**Hasil terakhir: 80 test, 80 lulus, 0 gagal, 0 dilewati.**
+**Hasil terakhir: 107 test, 107 lulus, 0 gagal, 0 dilewati.**
 
 | Kelompok | Jumlah | Cakupan |
 |---|---|---|
 | `TestNormalisasi` | 7 | Ligatur, baris, spasi, SHA-256, log |
-| `TestDeduplikasi` | 7 | DOI, Jaccard, near-dup tidak dihapus |
-| `TestValidasiPrepareFatal` | 4 | Fatal error menghentikan pipeline, tidak ada output |
+| `TestDeduplikasi` | 8 | DOI, Jaccard, near-dup tidak dihapus |
+| `TestValidasiPrepareFatal` | 5 | Fatal error menghentikan pipeline, tidak ada output |
 | `TestSegmentasi` | 7 | Kalimat, singkatan, desimal, tanda tanya, B5, urutan |
 | `TestSegmentasiURLDOI` | 3 | URL/DOI tidak menelan titik penutup kalimat |
 | `TestKonversiLS` | 7 | Label tunggal/ganda, UP, label_alt valid |
@@ -317,10 +317,15 @@ python -m pytest tests\test_pipeline.py -v
 | `TestGroundTruthSatuAnotator` | 3 | Satu anotator tidak diklaim konsensus |
 | `TestGroundTruthBelumDianotasi` | 2 | ann1=None atau ann2=None → belum-selesai |
 | `TestKelengkapan` | 8 | v utama, K2, K3, K4, segmen konsensus luar adj |
-| `TestKelengkapanK5` | 11 | K5 per-segmen dan per-abstrak: final/batas-sisa/dikecualikan |
+| `TestKelengkapanK5` | 10 | K5 per-segmen dan per-abstrak: final/batas-sisa/dikecualikan |
 | `TestKelengkapanBlokir` | 4 | BLOKIR-TT dan BLOKIR-BELUMSELESAI (hard stop) |
 | `TestSegmentasiNearDup` | 2 | Near-dup memblokir segmentasi; abstrak unik disegmentasi |
-| `TestIntegrasi` | 5 | End-to-end: prepare, GT+kelengkapan, BLOKIR-TT, CLI args |
+| `TestIntegrasi` | 4 | End-to-end: prepare, GT+kelengkapan, BLOKIR-TT, CLI args |
+| `TestGroundTruthFatalAndValidation` | 8 | Fatal duplikat/yatim, validasi label adjudikasi & konsensus |
+| `TestKelengkapanStatusAndLabelValidation` | 7 | Validasi status_akhir, label_akhir kosong/invalid, dikecualikan K3/K5 |
+| `TestConvertLabelStudioAnotatorPriorityAndErrors` | 3 | CLI anotator-id priority, validasi label kosong/invalid |
+| `TestValidateAnnotationsHardening` | 4 | Exit code nonzero pada ERROR, label kosong, adjudikasi ganda |
+| `TestPrepareLabelStudioTasks` | 5 | Segmen tidak beku fatal, 0 tasks exit nonzero, duplikat/yatim, konsistensi 1-to-1 |
 
 ---
 
@@ -357,7 +362,7 @@ Label dataset/
 │   ├── build_ground_truth.py            # Ground truth lengkap (konsensus + adj)
 │   └── calculate_completeness.py        # Kelengkapan dari ground_truth.csv (K1–K8)
 ├── tests/
-│   └── test_pipeline.py                 # 80 test (15 kelompok, semua fungsi produksi)
+│   └── test_pipeline.py                 # 107 test (20 kelompok, semua fungsi produksi)
 ├── pedoman_v1.0_beku.md                 # Pedoman Anotasi v1.0 (JANGAN DIUBAH)
 ├── requirements.txt
 └── README.md

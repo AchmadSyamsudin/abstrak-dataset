@@ -40,6 +40,7 @@ Penggunaan:
 import argparse
 import csv
 import logging
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -491,6 +492,8 @@ def main() -> None:
             "Ada ERROR dalam anotasi. Perbaiki sebelum melanjutkan ke adjudikasi "
             "atau perhitungan kelengkapan."
         )
+        sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ PRINSIP (TIDAK BOLEH DILANGGAR):
 - Integration test menggunakan direktori sementara yang terisolasi.
 - Test tidak menganggap lulus jika fungsi produksi belum dipanggil.
 
-KELOMPOK TEST (total 95 test):
+KELOMPOK TEST (total 107 test):
  1. TestNormalisasi              - normalisasi minimal (prepare_abstrak.py)
  2. TestDeduplikasi              - dedup DOI/hash/Jaccard
  3. TestValidasiPrepareFatal     - fatal errors menghentikan pipeline
@@ -32,7 +32,8 @@ KELOMPOK TEST (total 95 test):
 16. TestGroundTruthFatalAndValidation - fatal duplikat/yatim & validasi konsensus
 17. TestKelengkapanStatusAndLabelValidation - validasi status/label calculate_completeness
 18. TestConvertLabelStudioAnotatorPriorityAndErrors - CLI anotator-id priority & validasi label
-19. TestValidateAnnotationsHardening - validasi label kosong & adjudikasi ganda
+19. TestValidateAnnotationsHardening - exit code nonzero, validasi label kosong & adjudikasi ganda
+20. TestPrepareLabelStudioTasks  - validasi status beku, duplikasi, dan konsistensi tasks
 
 Jalankan:
     python tests/test_pipeline.py
@@ -1303,6 +1304,96 @@ class TestGroundTruthFatalAndValidation(unittest.TestCase):
         self.assertEqual(gt[0]["status_akhir"], "belum-selesai")
         self.assertNotEqual(gt[0]["sumber_keputusan"], "konsensus-dua-anotator")
 
+    def test_adjudikasi_label_tidak_valid_belum_selesai(self):
+        """
+        Validasi label adjudikasi:
+        - status final/batas-sisa wajib memiliki label akhir valid.
+        - label_alt_sisa maksimal 2 dan harus kode sah.
+        - label tidak valid menandai segmen belum-selesai, menambah n_error,
+          dan catatan audit tersimpan di catatan_gt.
+        """
+        from build_ground_truth import build_ground_truth
+        seg_map = {
+            "TEST_S01": {"id_segmen": "TEST_S01", "id_abstrak": "TEST_A01", "urutan": "1", "teks_segmen": "Teks 1.", "status_beku": "disetujui"},
+            "TEST_S02": {"id_segmen": "TEST_S02", "id_abstrak": "TEST_A01", "urutan": "2", "teks_segmen": "Teks 2.", "status_beku": "disetujui"},
+            "TEST_S03": {"id_segmen": "TEST_S03", "id_abstrak": "TEST_A01", "urutan": "3", "teks_segmen": "Teks 3.", "status_beku": "disetujui"},
+            "TEST_S04": {"id_segmen": "TEST_S04", "id_abstrak": "TEST_A01", "urutan": "4", "teks_segmen": "Teks 4.", "status_beku": "disetujui"},
+            "TEST_S05": {"id_segmen": "TEST_S05", "id_abstrak": "TEST_A01", "urutan": "5", "teks_segmen": "Teks 5.", "status_beku": "disetujui"},
+        }
+        ann1 = {
+            "TEST_S01": {"id_segmen": "TEST_S01", "id_abstrak": "TEST_A01", "label": "TJ", "flag": "B3", "alasan": "ragu", "simpul_penentu": "", "versi_pedoman": "v1.0"},
+            "TEST_S02": {"id_segmen": "TEST_S02", "id_abstrak": "TEST_A01", "label": "TJ", "flag": "B3", "alasan": "ragu", "simpul_penentu": "", "versi_pedoman": "v1.0"},
+            "TEST_S03": {"id_segmen": "TEST_S03", "id_abstrak": "TEST_A01", "label": "TJ", "flag": "B3", "alasan": "ragu", "simpul_penentu": "", "versi_pedoman": "v1.0"},
+            "TEST_S04": {"id_segmen": "TEST_S04", "id_abstrak": "TEST_A01", "label": "TJ", "flag": "B3", "alasan": "ragu", "simpul_penentu": "", "versi_pedoman": "v1.0"},
+            "TEST_S05": {"id_segmen": "TEST_S05", "id_abstrak": "TEST_A01", "label": "TT", "flag": "B2", "alasan": "tidak jelas", "simpul_penentu": "", "versi_pedoman": "v1.0"},
+        }
+        ann2 = {
+            "TEST_S01": {"id_segmen": "TEST_S01", "id_abstrak": "TEST_A01", "label": "MT", "flag": "", "alasan": "", "simpul_penentu": "", "versi_pedoman": "v1.0"},
+            "TEST_S02": {"id_segmen": "TEST_S02", "id_abstrak": "TEST_A01", "label": "MT", "flag": "", "alasan": "", "simpul_penentu": "", "versi_pedoman": "v1.0"},
+            "TEST_S03": {"id_segmen": "TEST_S03", "id_abstrak": "TEST_A01", "label": "MT", "flag": "", "alasan": "", "simpul_penentu": "", "versi_pedoman": "v1.0"},
+            "TEST_S04": {"id_segmen": "TEST_S04", "id_abstrak": "TEST_A01", "label": "MT", "flag": "", "alasan": "", "simpul_penentu": "", "versi_pedoman": "v1.0"},
+            "TEST_S05": {"id_segmen": "TEST_S05", "id_abstrak": "TEST_A01", "label": "TT", "flag": "B2", "alasan": "tidak jelas", "simpul_penentu": "", "versi_pedoman": "v1.0"},
+        }
+        adjudikasi = {
+            # S01: final tapi label_akhir kode palsu
+            "TEST_S01": {"id_segmen": "TEST_S01", "id_abstrak": "TEST_A01", "label_akhir": "KODE_PALSU", "label_alt_sisa": "", "status_akhir": "final", "adjudikator_id": "adj1", "alasan": "tes"},
+            # S02: final tapi label_akhir kosong
+            "TEST_S02": {"id_segmen": "TEST_S02", "id_abstrak": "TEST_A01", "label_akhir": "", "label_alt_sisa": "", "status_akhir": "final", "adjudikator_id": "adj1", "alasan": "tes"},
+            # S03: batas-sisa tapi label_alt > 2 alternatif
+            "TEST_S03": {"id_segmen": "TEST_S03", "id_abstrak": "TEST_A01", "label_akhir": "LB", "label_alt_sisa": "TJ;MT;HS", "status_akhir": "batas-sisa", "adjudikator_id": "adj1", "alasan": "tes"},
+            # S04: batas-sisa tapi label_alt kode tidak sah
+            "TEST_S04": {"id_segmen": "TEST_S04", "id_abstrak": "TEST_A01", "label_akhir": "LB", "label_alt_sisa": "INVALID", "status_akhir": "batas-sisa", "adjudikator_id": "adj1", "alasan": "tes"},
+            # S05: dikecualikan dengan label_akhir TT (TT tidak sah untuk status dikecualikan/data emas)
+            "TEST_S05": {"id_segmen": "TEST_S05", "id_abstrak": "TEST_A01", "label_akhir": "TT", "label_alt_sisa": "", "status_akhir": "dikecualikan", "adjudikator_id": "adj1", "alasan": "tes"},
+        }
+
+        gt_rows, stats = build_ground_truth(seg_map, ann1, ann2, adjudikasi)
+        self.assertEqual(stats["belum-selesai"], 5)
+        self.assertGreaterEqual(stats["n_error"], 5)
+
+        for r in gt_rows:
+            self.assertEqual(r["status_akhir"], "belum-selesai")
+            self.assertEqual(r["sumber_keputusan"], "-")
+            self.assertIn("ERROR ADJUDIKASI", r["catatan_gt"])
+
+    def test_adjudikasi_label_tidak_valid_cli_gagal(self):
+        """CLI build_ground_truth.py harus gagal exit nonzero dan tidak menyatakan semua segmen selesai."""
+        import subprocess
+        seg_path = self.tmp / "segmen.csv"
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "S01", "urutan": "1", "teks_segmen": "Teks.", "status_beku": "disetujui"}]
+        )
+        an1_path = self.tmp / "an1.csv"
+        an2_path = self.tmp / "an2.csv"
+        self._write_csv(an1_path,
+            ["id_abstrak", "id_segmen", "label", "flag", "alasan", "simpul_penentu", "versi_pedoman"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "S01", "label": "TJ", "flag": "B3", "alasan": "ragu", "simpul_penentu": "", "versi_pedoman": "v1.0"}]
+        )
+        self._write_csv(an2_path,
+            ["id_abstrak", "id_segmen", "label", "flag", "alasan", "simpul_penentu", "versi_pedoman"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "S01", "label": "MT", "flag": "", "alasan": "", "simpul_penentu": "", "versi_pedoman": "v1.0"}]
+        )
+        adj_path = self.tmp / "adj.csv"
+        self._write_csv(adj_path,
+            ["id_abstrak", "id_segmen", "label_akhir", "label_alt_sisa", "status_akhir", "adjudikator_id", "alasan"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "S01", "label_akhir": "KODE_SALAH", "label_alt_sisa": "", "status_akhir": "final", "adjudikator_id": "adj1", "alasan": "tes"}]
+        )
+        out_dir = self.tmp / "out_gt_err"
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "build_ground_truth.py"),
+             "--segmen", str(seg_path), "--anotasi-1", str(an1_path),
+             "--anotasi-2", str(an2_path), "--adjudikasi", str(adj_path),
+             "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertNotEqual(res.returncode, 0, "CLI harus exit nonzero jika ada adjudikasi tidak valid")
+        laporan_path = out_dir / "laporan_ground_truth.txt"
+        self.assertTrue(laporan_path.exists())
+        laporan = laporan_path.read_text(encoding="utf-8")
+        self.assertNotIn("Semua segmen telah selesai", laporan)
+        self.assertIn("BELUM SELESAI", laporan)
+
 
 # ===========================================================================
 # 17. TestKelengkapanStatusAndLabelValidation
@@ -1351,6 +1442,48 @@ class TestKelengkapanStatusAndLabelValidation(unittest.TestCase):
         }]
         results, blocked = self.compute(gt_rows)
         self.assertEqual(blocked["TEST_INV04"]["status_blokir"], "BLOKIR-INVALID")
+
+    def test_label_akhir_kosong_final_dan_batas_sisa_blokir(self):
+        """Label akhir kosong pada status final dan batas-sisa WAJIB memblokir abstrak sebagai BLOKIR-INVALID."""
+        gt_rows_final = [{
+            "id_abstrak": "TEST_EMP01", "id_segmen": "S01",
+            "label_akhir": "", "label_alt_sisa": "", "status_akhir": "final"
+        }]
+        results_final, blocked_final = self.compute(gt_rows_final)
+        self.assertEqual(blocked_final["TEST_EMP01"]["status_blokir"], "BLOKIR-INVALID")
+        self.assertTrue(any("KOSONG" in c for c in blocked_final["TEST_EMP01"]["catatan"]))
+
+        gt_rows_sisa = [{
+            "id_abstrak": "TEST_EMP02", "id_segmen": "S01",
+            "label_akhir": "", "label_alt_sisa": "LB", "status_akhir": "batas-sisa"
+        }]
+        results_sisa, blocked_sisa = self.compute(gt_rows_sisa)
+        self.assertEqual(blocked_sisa["TEST_EMP02"]["status_blokir"], "BLOKIR-INVALID")
+        self.assertTrue(any("KOSONG" in c for c in blocked_sisa["TEST_EMP02"]["catatan"]))
+
+    def test_dikecualikan_label_kosong_diizinkan_dan_tidak_blokir(self):
+        """Status dikecualikan dengan label_akhir kosong diizinkan (tidak memblokir abstrak) per K3 & K5."""
+        gt_rows = [
+            {"id_abstrak": "TEST_EX01", "id_segmen": "S01", "label_akhir": "LB", "label_alt_sisa": "", "status_akhir": "final"},
+            {"id_abstrak": "TEST_EX01", "id_segmen": "S02", "label_akhir": "", "label_alt_sisa": "TJ", "status_akhir": "dikecualikan"}
+        ]
+        results, blocked = self.compute(gt_rows)
+        self.assertIsNone(blocked["TEST_EX01"]["status_blokir"])
+        comp = results["TEST_EX01"]
+        # v utama: LB=1, TJ=0 (K3)
+        self.assertEqual(comp.v["LB"], 1)
+        self.assertEqual(comp.v["TJ"], 0)
+        # vmin: TJ=0, vmaks: TJ=1 (K5)
+        self.assertEqual(comp.vmin["TJ"], 0)
+        self.assertEqual(comp.vmaks["TJ"], 1)
+
+    def test_dikecualikan_label_tidak_valid_blokir(self):
+        """Status dikecualikan jika label_akhir diisi nilai tidak valid harus memblokir abstrak."""
+        gt_rows = [
+            {"id_abstrak": "TEST_EX02", "id_segmen": "S01", "label_akhir": "INVALID_X", "label_alt_sisa": "", "status_akhir": "dikecualikan"}
+        ]
+        results, blocked = self.compute(gt_rows)
+        self.assertEqual(blocked["TEST_EX02"]["status_blokir"], "BLOKIR-INVALID")
 
 
 # ===========================================================================
@@ -1472,6 +1605,265 @@ class TestValidateAnnotationsHardening(unittest.TestCase):
         rule_14_issues = [i for i in issues if i.rule_no == 14]
         self.assertTrue(len(rule_14_issues) > 0)
 
+    def test_cli_validator_exit_nonzero_on_error(self):
+        """CLI validate_annotations.py harus exit 1 jika ada ERROR, tetapi laporan tetap dibuat."""
+        import subprocess
+        seg_path = self.tmp / "segmen.csv"
+        abs_path = self.tmp / "abstrak.csv"
+        an_path = self.tmp / "anotasi.csv"
+        self._write_csv(abs_path, ["id_abstrak", "kunci_artikel"], [{"id_abstrak": "TEST_A01", "kunci_artikel": "k1"}])
+        self._write_csv(seg_path, ["id_segmen", "id_abstrak", "status_beku"], [{"id_segmen": "S01", "id_abstrak": "TEST_A01", "status_beku": "disetujui"}])
+        # Buat anotasi dengan label kosong (ERROR)
+        self._write_csv(an_path,
+            ["id_abstrak", "id_segmen", "anotator_id", "label", "label_alt", "flag", "alasan", "simpul_penentu", "versi_pedoman"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "S01", "anotator_id": "an1", "label": "", "label_alt": "", "flag": "", "alasan": "", "simpul_penentu": "", "versi_pedoman": "v1.0"}]
+        )
+        out_dir = self.tmp / "out_err"
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "validate_annotations.py"),
+             "--anotasi", str(an_path), "--segmen", str(seg_path),
+             "--abstrak", str(abs_path), "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertEqual(res.returncode, 1, "Harus exit code 1 jika ada ERROR validasi")
+        # Laporan tetap harus dibuat dalam kedua kondisi
+        self.assertTrue((out_dir / "laporan_validasi_ringkasan.txt").exists())
+        self.assertTrue((out_dir / "laporan_validasi.csv").exists())
+        ringkasan = (out_dir / "laporan_validasi_ringkasan.txt").read_text(encoding="utf-8")
+        self.assertIn("ERROR", ringkasan)
+
+    def test_cli_validator_exit_zero_on_success(self):
+        """CLI validate_annotations.py harus exit 0 jika tidak ada ERROR."""
+        import subprocess
+        seg_path = self.tmp / "segmen.csv"
+        abs_path = self.tmp / "abstrak.csv"
+        an_path = self.tmp / "anotasi.csv"
+        self._write_csv(abs_path, ["id_abstrak", "kunci_artikel"], [{"id_abstrak": "TEST_A01", "kunci_artikel": "k1"}])
+        self._write_csv(seg_path, ["id_segmen", "id_abstrak", "status_beku"], [{"id_segmen": "S01", "id_abstrak": "TEST_A01", "status_beku": "disetujui"}])
+        self._write_csv(an_path,
+            ["id_abstrak", "id_segmen", "anotator_id", "label", "label_alt", "flag", "alasan", "simpul_penentu", "versi_pedoman"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "S01", "anotator_id": "an1", "label": "TJ", "label_alt": "", "flag": "", "alasan": "", "simpul_penentu": "TJ-1", "versi_pedoman": "v1.0"}]
+        )
+        out_dir = self.tmp / "out_ok"
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "validate_annotations.py"),
+             "--anotasi", str(an_path), "--segmen", str(seg_path),
+             "--abstrak", str(abs_path), "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertEqual(res.returncode, 0, "Harus exit code 0 jika tidak ada ERROR")
+        self.assertTrue((out_dir / "laporan_validasi_ringkasan.txt").exists())
+        self.assertTrue((out_dir / "laporan_validasi.csv").exists())
+
+
+# ===========================================================================
+# 20. TestPrepareLabelStudioTasks
+# ===========================================================================
+class TestPrepareLabelStudioTasks(unittest.TestCase):
+    """
+    Uji ketat prepare_labelstudio_tasks.py:
+    - Segmen tidak dibekukan dalam korpus anotasi menghentikan proses (exit nonzero).
+    - Tidak ada task yang dihasilkan menghentikan proses (exit nonzero).
+    - Duplikat ID segmen menghentikan proses (exit nonzero).
+    - ID abstrak tidak terdaftar di abstrak.csv menghentikan proses (exit nonzero).
+    - Konsistensi jumlah dan identitas segmen: setiap segmen beku terwakili tepat satu kali per anotator.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="test_ls_tasks_"))
+        self.scripts_dir = Path(__file__).parent.parent / "scripts"
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_csv(self, path: Path, fieldnames: list, rows: list):
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def test_prepare_tasks_segmen_tidak_beku_fatal(self):
+        """Segmen yang belum dibekukan (misal: 'draft') di korpus target harus menghentikan proses dengan nonzero code."""
+        import subprocess
+        abs_path = self.tmp / "abstrak.csv"
+        seg_path = self.tmp / "segmen.csv"
+        out_dir = self.tmp / "out"
+
+        self._write_csv(abs_path,
+            ["id_abstrak", "judul", "jurnal", "tahun", "jenis_studi", "peran_data", "teks_kerja"],
+            [{"id_abstrak": "TEST_A01", "judul": "J1", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "korpus-anotasi", "teks_kerja": "Teks"}]
+        )
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [
+                {"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S01", "urutan": "1", "teks_segmen": "Teks 1.", "status_beku": "disetujui"},
+                {"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S02", "urutan": "2", "teks_segmen": "Teks 2.", "status_beku": "draft"},
+            ]
+        )
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "prepare_labelstudio_tasks.py"),
+             "--abstrak", str(abs_path), "--segmen", str(seg_path),
+             "--peran-data", "korpus-anotasi",
+             "--anotator-ids", "an1,an2",
+             "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertNotEqual(res.returncode, 0, "Harus gagal jika ada segmen belum dibekukan")
+        self.assertIn("FATAL", res.stderr + res.stdout)
+
+    def test_prepare_tasks_zero_tasks_exit_nonzero(self):
+        """Jika tidak ada segmen yang sesuai peran_data, harus exit nonzero."""
+        import subprocess
+        abs_path = self.tmp / "abstrak.csv"
+        seg_path = self.tmp / "segmen.csv"
+        out_dir = self.tmp / "out"
+
+        self._write_csv(abs_path,
+            ["id_abstrak", "judul", "jurnal", "tahun", "jenis_studi", "peran_data", "teks_kerja"],
+            [{"id_abstrak": "TEST_A01", "judul": "J1", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "data-pengembangan", "teks_kerja": "Teks"}]
+        )
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [{"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S01", "urutan": "1", "teks_segmen": "Teks 1.", "status_beku": "disetujui"}]
+        )
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "prepare_labelstudio_tasks.py"),
+             "--abstrak", str(abs_path), "--segmen", str(seg_path),
+             "--peran-data", "korpus-anotasi",
+             "--anotator-ids", "an1,an2",
+             "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertNotEqual(res.returncode, 0, "Harus exit nonzero jika 0 task dihasilkan")
+
+    def test_prepare_tasks_duplikat_id_segmen_fatal(self):
+        """Duplikat ID segmen di segmen.csv harus menghentikan proses."""
+        import subprocess
+        abs_path = self.tmp / "abstrak.csv"
+        seg_path = self.tmp / "segmen.csv"
+        out_dir = self.tmp / "out"
+
+        self._write_csv(abs_path,
+            ["id_abstrak", "judul", "jurnal", "tahun", "jenis_studi", "peran_data", "teks_kerja"],
+            [{"id_abstrak": "TEST_A01", "judul": "J1", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "korpus-anotasi", "teks_kerja": "Teks"}]
+        )
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [
+                {"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S01", "urutan": "1", "teks_segmen": "Teks 1.", "status_beku": "disetujui"},
+                {"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S01", "urutan": "2", "teks_segmen": "Teks 2.", "status_beku": "disetujui"},
+            ]
+        )
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "prepare_labelstudio_tasks.py"),
+             "--abstrak", str(abs_path), "--segmen", str(seg_path),
+             "--peran-data", "korpus-anotasi",
+             "--anotator-ids", "an1,an2",
+             "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertNotEqual(res.returncode, 0, "Harus exit nonzero jika ID segmen duplikat")
+
+    def test_prepare_tasks_id_abstrak_tidak_dikenal_fatal(self):
+        """ID abstrak di segmen.csv yang tidak ada di abstrak.csv harus menghentikan proses."""
+        import subprocess
+        abs_path = self.tmp / "abstrak.csv"
+        seg_path = self.tmp / "segmen.csv"
+        out_dir = self.tmp / "out"
+
+        self._write_csv(abs_path,
+            ["id_abstrak", "judul", "jurnal", "tahun", "jenis_studi", "peran_data", "teks_kerja"],
+            [{"id_abstrak": "TEST_A01", "judul": "J1", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "korpus-anotasi", "teks_kerja": "Teks"}]
+        )
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            [
+                {"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S01", "urutan": "1", "teks_segmen": "Teks 1.", "status_beku": "disetujui"},
+                {"id_abstrak": "TEST_A99", "id_segmen": "TEST_A99-S01", "urutan": "1", "teks_segmen": "Teks liar.", "status_beku": "disetujui"},
+            ]
+        )
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "prepare_labelstudio_tasks.py"),
+             "--abstrak", str(abs_path), "--segmen", str(seg_path),
+             "--peran-data", "korpus-anotasi",
+             "--anotator-ids", "an1,an2",
+             "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertNotEqual(res.returncode, 0, "Harus exit nonzero jika ada ID abstrak tak dikenal")
+
+    def test_prepare_tasks_konsistensi_jumlah_dan_identitas_segmen(self):
+        """
+        Konsistensi jumlah dan identitas segmen:
+        Semua segmen beku dari abstrak terpilih terwakili tepat satu kali per anotator.
+        """
+        import subprocess, json
+        abs_path = self.tmp / "abstrak.csv"
+        seg_path = self.tmp / "segmen.csv"
+        out_dir = self.tmp / "out"
+
+        self._write_csv(abs_path,
+            ["id_abstrak", "judul", "jurnal", "tahun", "jenis_studi", "peran_data", "teks_kerja"],
+            [
+                {"id_abstrak": "TEST_A01", "judul": "J1", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "korpus-anotasi", "teks_kerja": "Teks 1"},
+                {"id_abstrak": "TEST_A02", "judul": "J2", "jurnal": "J", "tahun": "2024", "jenis_studi": "kualitatif", "peran_data": "korpus-anotasi", "teks_kerja": "Teks 2"},
+                {"id_abstrak": "TEST_A03", "judul": "J3", "jurnal": "J", "tahun": "2024", "jenis_studi": "kuantitatif", "peran_data": "data-pengembangan", "teks_kerja": "Teks 3"},
+            ]
+        )
+        expected_seg_ids = [
+            "TEST_A01-S01", "TEST_A01-S02", "TEST_A01-S03",
+            "TEST_A02-S01", "TEST_A02-S02",
+        ]
+        seg_rows = [
+            {"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S01", "urutan": "1", "teks_segmen": "K1.", "status_beku": "disetujui"},
+            {"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S02", "urutan": "2", "teks_segmen": "K2.", "status_beku": "disetujui"},
+            {"id_abstrak": "TEST_A01", "id_segmen": "TEST_A01-S03", "urutan": "3", "teks_segmen": "K3.", "status_beku": "beku"},
+            {"id_abstrak": "TEST_A02", "id_segmen": "TEST_A02-S01", "urutan": "1", "teks_segmen": "K4.", "status_beku": "disetujui"},
+            {"id_abstrak": "TEST_A02", "id_segmen": "TEST_A02-S02", "urutan": "2", "teks_segmen": "K5.", "status_beku": "beku"},
+            # TEST_A03 bukan korpus-anotasi
+            {"id_abstrak": "TEST_A03", "id_segmen": "TEST_A03-S01", "urutan": "1", "teks_segmen": "K6.", "status_beku": "disetujui"},
+        ]
+        self._write_csv(seg_path,
+            ["id_abstrak", "id_segmen", "urutan", "teks_segmen", "status_beku"],
+            seg_rows
+        )
+
+        res = subprocess.run(
+            [sys.executable, str(self.scripts_dir / "prepare_labelstudio_tasks.py"),
+             "--abstrak", str(abs_path), "--segmen", str(seg_path),
+             "--peran-data", "korpus-anotasi",
+             "--anotator-ids", "an1,an2",
+             "--output-dir", str(out_dir)],
+            capture_output=True, text=True
+        )
+        self.assertEqual(res.returncode, 0, f"Error: {res.stderr}\n{res.stdout}")
+
+        # Periksa laporan filter peran_data
+        output_text = res.stdout + res.stderr
+        self.assertIn("Jumlah sebelum filter peran_data", output_text)
+        self.assertIn("Jumlah sesudah filter peran_data='korpus-anotasi'", output_text)
+
+        # Periksa file tasks
+        task_f1 = out_dir / "tasks_an1_korpus-anotasi.json"
+        task_f2 = out_dir / "tasks_an2_korpus-anotasi.json"
+        self.assertTrue(task_f1.exists())
+        self.assertTrue(task_f2.exists())
+
+        tasks1 = json.loads(task_f1.read_text(encoding="utf-8"))
+        tasks2 = json.loads(task_f2.read_text(encoding="utf-8"))
+
+        self.assertEqual(len(tasks1), len(expected_seg_ids))
+        self.assertEqual(len(tasks2), len(expected_seg_ids))
+
+        seg_ids_1 = [t["data"]["id_segmen"] for t in tasks1]
+        seg_ids_2 = [t["data"]["id_segmen"] for t in tasks2]
+
+        self.assertEqual(sorted(seg_ids_1), sorted(expected_seg_ids))
+        self.assertEqual(sorted(seg_ids_2), sorted(expected_seg_ids))
+        self.assertEqual(len(seg_ids_1), len(set(seg_ids_1)), "Setiap segmen harus muncul tepat 1 kali")
+        self.assertEqual(len(seg_ids_2), len(set(seg_ids_2)), "Setiap segmen harus muncul tepat 1 kali")
+
 
 # ===========================================================================
 # Entry point
@@ -1497,6 +1889,7 @@ if __name__ == "__main__":
         TestKelengkapanStatusAndLabelValidation,
         TestConvertLabelStudioAnotatorPriorityAndErrors,
         TestValidateAnnotationsHardening,
+        TestPrepareLabelStudioTasks,
     ]
 
     loader = unittest.TestLoader()
@@ -1507,4 +1900,5 @@ if __name__ == "__main__":
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     sys.exit(0 if result.wasSuccessful() else 1)
+
 

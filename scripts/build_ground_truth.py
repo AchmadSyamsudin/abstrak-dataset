@@ -66,6 +66,7 @@ logger = logging.getLogger("build_ground_truth")
 
 VALID_STATUS_AKHIR: Set[str] = {"final", "batas-sisa", "dikecualikan"}
 VALID_LABELS: Set[str] = {"LB", "TJ", "MT", "HS", "SI", "LAINNYA", "TT"}
+VALID_LABELS_KEPUTUSAN: Set[str] = {"LB", "TJ", "MT", "HS", "SI", "LAINNYA"}
 
 GT_COLS = [
     "id_abstrak", "id_segmen", "urutan", "teks_segmen",
@@ -460,37 +461,85 @@ def build_ground_truth(
                 adj_label = adj.get("label_akhir", "").strip()
                 adj_label_alt = adj.get("label_alt_sisa", "").strip()
 
-                if adj_status not in VALID_STATUS_AKHIR:
-                    logger.error(
-                        f"Segmen '{sid}': status_akhir adjudikasi '{adj_status}' "
-                        "tidak valid. Diperlakukan sebagai belum-selesai."
-                    )
-                    adj_status = "belum-selesai"
-                    n_error += 1
+                adj_errors = []
 
-                if not adj_label and adj_status not in ("dikecualikan",):
+                # 1. Validasi status_akhir
+                if adj_status not in VALID_STATUS_AKHIR:
+                    adj_errors.append(
+                        f"status_akhir '{adj_status}' tidak valid (diperbolehkan: {sorted(VALID_STATUS_AKHIR)})"
+                    )
+
+                # 2. Validasi label_akhir
+                if adj_status in ("final", "batas-sisa"):
+                    if not adj_label:
+                        adj_errors.append(
+                            f"status '{adj_status}' wajib memiliki label_akhir, tetapi kosong"
+                        )
+                    else:
+                        label_parts = [l.strip() for l in adj_label.split("+") if l.strip()]
+                        if not label_parts:
+                            adj_errors.append("label_akhir kosong")
+                        else:
+                            invalid_l = [l for l in label_parts if l not in VALID_LABELS_KEPUTUSAN]
+                            if invalid_l:
+                                adj_errors.append(
+                                    f"label_akhir mengandung kode tidak sah: {invalid_l}"
+                                )
+                elif adj_status == "dikecualikan":
+                    # Status dikecualikan: label_akhir boleh kosong.
+                    # Jika diisi, harus kode yang sah (dan bukan TT).
+                    if adj_label:
+                        label_parts = [l.strip() for l in adj_label.split("+") if l.strip()]
+                        invalid_l = [l for l in label_parts if l not in VALID_LABELS_KEPUTUSAN]
+                        if invalid_l:
+                            adj_errors.append(
+                                f"label_akhir status dikecualikan mengandung kode tidak sah: {invalid_l}"
+                            )
+
+                # 3. Validasi label_alt_sisa
+                normalized_alt = ""
+                if adj_label_alt:
+                    alt_parts = [a.strip() for a in adj_label_alt.replace(",", ";").split(";") if a.strip()]
+                    if len(alt_parts) > 2:
+                        adj_errors.append(
+                            f"label_alt_sisa memiliki {len(alt_parts)} alternatif (maksimal 2)"
+                        )
+                    for alt in alt_parts:
+                        sub_labels = [s.strip() for s in alt.split("+") if s.strip()]
+                        invalid_sub = [s for s in sub_labels if s not in VALID_LABELS_KEPUTUSAN]
+                        if invalid_sub:
+                            adj_errors.append(
+                                f"label_alt_sisa mengandung kode tidak sah: {invalid_sub}"
+                            )
+                    normalized_alt = ";".join(alt_parts)
+
+                if adj_errors:
+                    err_msg = "; ".join(adj_errors)
                     logger.error(
-                        f"Segmen '{sid}': label_akhir kosong di adjudikasi.csv "
-                        f"(status='{adj_status}'). Segmen dianggap belum-selesai."
+                        f"Segmen '{sid}': adjudikasi tidak valid ({err_msg}). "
+                        "Segmen ditandai belum-selesai dan tidak dijadikan data emas."
                     )
                     adj_status = "belum-selesai"
                     n_error += 1
+                    catatan = f"ERROR ADJUDIKASI: {err_msg}; Alasan antrean: {'; '.join(reasons)}"
+                else:
+                    catatan = f"Alasan adjudikasi: {'; '.join(reasons)}"
 
                 gt_rows.append({
                     "id_abstrak": id_abstrak, "id_segmen": sid,
                     "urutan": urutan, "teks_segmen": teks,
                     "label_an1": label_an1, "label_an2": label_an2,
                     "label_akhir": adj_label,
-                    "label_alt_sisa": adj_label_alt,
+                    "label_alt_sisa": normalized_alt,
                     "flag_an1": flag_an1, "flag_an2": flag_an2,
                     "alasan_an1": alasan_an1, "alasan_an2": alasan_an2,
                     "simpul_an1": simpul_an1, "simpul_an2": simpul_an2,
                     "status_akhir": adj_status,
-                    "sumber_keputusan": "adjudikasi",
+                    "sumber_keputusan": "adjudikasi" if not adj_errors else "-",
                     "adjudikator_id": adj.get("adjudikator_id", ""),
                     "alasan_adjudikasi": adj.get("alasan", ""),
                     "versi_pedoman": versi,
-                    "catatan_gt": f"Alasan adjudikasi: {'; '.join(reasons)}",
+                    "catatan_gt": catatan,
                 })
                 stats[adj_status] += 1
 
