@@ -19,7 +19,8 @@
    - [Langkah 6 – Ekspor dan konversi anotasi ke CSV](#langkah-6--ekspor-dan-konversi-anotasi-ke-csv)
    - [Langkah 7 – Validasi anotasi](#langkah-7--validasi-anotasi)
    - [Langkah 8 – Susun antrean adjudikasi](#langkah-8--susun-antrean-adjudikasi)
-   - [Langkah 9 – Hitung kelengkapan abstrak](#langkah-9--hitung-kelengkapan-abstrak)
+   - [Langkah 9 – Buat ground truth lengkap ⚠️ WAJIB sebelum kelengkapan](#langkah-9--buat-ground-truth-lengkap)
+   - [Langkah 10 – Hitung kelengkapan abstrak](#langkah-10--hitung-kelengkapan-abstrak)
 5. [Lokasi Berkas Keluaran](#5-lokasi-berkas-keluaran)
 6. [Cara Menjalankan Unit Test](#6-cara-menjalankan-unit-test)
 7. [Keterbatasan Fitur Label Studio](#7-keterbatasan-fitur-label-studio)
@@ -38,18 +39,16 @@
 ### Instalasi dependensi Python
 
 ```powershell
-# Buka PowerShell di direktori proyek
 cd "c:\Users\ahmad\OneDrive\Documents\semester_7\Tugas Akhir\Label dataset"
 
 # (Opsional tapi dianjurkan) Buat virtual environment
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 
-# Install dependensi
 pip install -r requirements.txt
 ```
 
-> **Catatan:** Jika ada error `ExecutionPolicy`, jalankan dulu:
+> **Catatan:** Jika ada error `ExecutionPolicy`:
 > ```powershell
 > Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 > ```
@@ -58,59 +57,37 @@ pip install -r requirements.txt
 
 ## 2. Cara Menjalankan Label Studio
 
-### Instalasi Label Studio
-
 ```powershell
 pip install label-studio
+label-studio start    # buka http://localhost:8080
 ```
 
-### Menjalankan Label Studio secara lokal
-
-```powershell
-# Aktifkan environment jika belum
-.venv\Scripts\Activate.ps1
-
-# Jalankan Label Studio (akan membuka browser otomatis di http://localhost:8080)
-label-studio start
-```
-
-### Konfigurasi awal Label Studio
-1. Buka browser di `http://localhost:8080`
-2. Daftar atau login
-3. Buat proyek baru (lihat Langkah 5 untuk detail dua proyek per anotator)
-4. Di pengaturan proyek, pilih tab **Labeling Interface** → **Code**
-5. Salin seluruh isi `config/label_studio_config.xml` dan tempel
-6. Klik **Save**
+**Setup antarmuka:**
+1. Buat proyek baru → **Labeling Interface** → **Code**
+2. Salin isi `config/label_studio_config.xml` dan tempel → **Save**
 
 ---
 
 ## 3. Cara Mengisi CSV Input
 
-Gunakan templat di `data/templates/abstrak_input_template.csv` sebagai panduan.
-Buka file dengan **Microsoft Excel** atau editor teks.
+Gunakan templat `data/templates/abstrak_input_template.csv`.
 
-### Kolom wajib (tidak boleh kosong)
+### Kolom wajib (pipeline berhenti jika kosong)
 
 | Kolom | Keterangan |
 |---|---|
-| `id_abstrak` | Kode unik, contoh: `A001`, `A002` |
+| `id_abstrak` | Kode unik, contoh: `A001` |
 | `judul` | Judul artikel lengkap |
 | `jurnal` | Nama jurnal |
 | `tahun` | Tahun terbit, contoh: `2024` |
-| `jenis_studi` | Salah satu dari: `kuantitatif`, `kualitatif`, `campuran`, `pengembangan-produk`, `literatur`, `konseptual` |
-| `peran_data` | Salah satu dari: `data-pengembangan`, `pilot2`, `korpus-anotasi` |
-| `teks_mentah` | Salin VERBATIM dari PDF/HTML, **tidak boleh diubah setelah diisi** |
-
-### Kolom opsional
-
-`volume_nomor`, `doi`, `url`, `jenis_sumber`, `versi_dokumen`, `tanggal_akses`, `lisensi`
+| `jenis_studi` | `kuantitatif` / `kualitatif` / `campuran` / `pengembangan-produk` / `literatur` / `konseptual` |
+| `peran_data` | `data-pengembangan` / `pilot2` / `korpus-anotasi` |
+| `teks_mentah` | Salin VERBATIM dari PDF/HTML |
 
 ### Aturan penting
-- `jenis_sumber`: `pdf_terbit` atau `halaman_artikel`
-- `tanggal_akses`: format `YYYY-MM-DD`
-- Kolom yang belum diketahui dikosongkan (dua koma berurutan dalam CSV)
-- Satu artikel hanya boleh muncul di **satu** `peran_data`
-- `teks_mentah`: salin dari karakter pertama kalimat pertama sampai karakter terakhir kalimat terakhir; **tanpa** label seksi, judul, atau kata kunci
+- Pipeline berhenti (**fatal error**) jika: kolom wajib kosong, ID duplikat, atau satu artikel di lebih dari satu peran data
+- Satu artikel hanya boleh di **satu** `peran_data`
+- `teks_mentah`: salin verbatim, **tanpa** label seksi atau kata kunci
 
 ---
 
@@ -119,65 +96,47 @@ Buka file dengan **Microsoft Excel** atau editor teks.
 ### Langkah 1 – Persiapan abstrak
 
 ```powershell
-# Normalisasi, hash SHA-256, deduplikasi
 python scripts\prepare_abstrak.py `
     --input data\raw\abstrak_input.csv `
     --output-dir data\processed
-
-# Output:
-#   data\processed\abstrak.csv          (metadata + teks mentah + teks kerja)
-#   data\processed\log_normalisasi.csv  (setiap perubahan normalisasi)
-#   data\processed\log_dedup.csv        (entri yang dibuang atau perlu ditinjau)
 ```
 
-> ⚠️ **Periksa log_dedup.csv** sebelum melanjutkan. Duplikat dekat (Jaccard ≥ 0,90) ditandai `duplikat-dekat-ditinjau` dan **wajib diperiksa manual** sebelum dilanjutkan.
+**Error FATAL** (tidak ada output jika ini terjadi):
+- Kolom wajib kosong / enum tidak valid
+- ID abstrak duplikat
+- Artikel sama di lebih dari satu peran
+
+> ⚠️ **Periksa `log_dedup.csv`** — abstrak `duplikat-dekat-ditinjau` diblokir di langkah 2 sampai review selesai.
 
 ---
 
 ### Langkah 2 – Segmentasi kalimat
 
 ```powershell
-# Segmentasi berbasis aturan (menghasilkan kandidat)
 python scripts\segment_abstrak.py `
     --abstrak data\processed\abstrak.csv `
     --output-dir data\processed `
     --peran-data korpus-anotasi
-
-# Output:
-#   data\processed\kandidat_segmen.csv              (semua kandidat)
-#   data\processed\review_segmentasi_{id}.csv       (per abstrak, untuk review)
 ```
 
-> ℹ️ Tanpa argumen `--peran-data`, semua abstrak di semua peran akan diproses.
+> ⚠️ Abstrak berstatus `duplikat-dekat-ditinjau` **diblokir** dan tidak disegmentasi. Selesaikan review manual di `log_dedup.csv`, perbarui `status_dedup` di `abstrak.csv`, lalu jalankan ulang.
 
 ---
 
 ### Langkah 3 – Pemeriksaan dan pembekuan segmen
 
-**WAJIB dilakukan sebelum anotasi dimulai** oleh pemeriksa yang bukan anotator.
+**WAJIB dilakukan sebelum anotasi** oleh pemeriksa (bukan anotator).
 
-1. Buka setiap file `data/processed/review_segmentasi_{id_abstrak}.csv`
-2. Periksa kolom `perlu_review` (= `Ya` = perlu perhatian)
-3. Baca `catatan_b5` untuk keterangan keraguan segmentasi
-4. Isi kolom `disetujui` dengan `Ya` atau `Tidak` (jika tidak disetujui, tulis usulan batas)
-5. Setelah semua segmen diperiksa, susun `segmen.csv` berdasarkan kandidat yang sudah disetujui:
-
-```powershell
-# Salin kandidat_segmen.csv ke segmen.csv HANYA setelah pemeriksaan manual selesai
-# Tambahkan kolom status_beku = "disetujui" untuk setiap segmen yang sudah OK
-# Format segmen.csv:
-#   id_abstrak, id_segmen, urutan, teks_segmen, asal_segmentasi,
-#   catatan_segmentasi, status_beku
-```
-
-> ⚠️ **Segmentasi yang belum berstatus `disetujui` atau `beku` tidak akan diproses** oleh `prepare_labelstudio_tasks.py`.
+1. Buka setiap `data/processed/review_segmentasi_{id}.csv`
+2. Periksa kolom `perlu_review` dan `catatan_b5`
+3. Isi `disetujui` dengan `Ya` atau `Tidak`
+4. Susun `segmen.csv` dengan kolom `status_beku = "disetujui"` untuk segmen yang sudah disetujui
 
 ---
 
 ### Langkah 4 – Buat dan impor task JSON ke Label Studio
 
 ```powershell
-# Buat task untuk dua anotator (an1 dan an2)
 python scripts\prepare_labelstudio_tasks.py `
     --segmen data\processed\segmen.csv `
     --abstrak data\processed\abstrak.csv `
@@ -185,73 +144,35 @@ python scripts\prepare_labelstudio_tasks.py `
     --anotator-ids an1,an2 `
     --peran-data korpus-anotasi `
     --seed 42
-
-# Output:
-#   data\labelstudio\tasks_an1_korpus-anotasi.json
-#   data\labelstudio\tasks_an2_korpus-anotasi.json
-#   data\labelstudio\seed_info.json   (catat seed untuk reproduksi)
 ```
-
-**Impor ke Label Studio:**
-1. Buka proyek di Label Studio
-2. Klik **Import** → pilih file JSON sesuai anotatornya
-3. Konfirmasi impor
 
 ---
 
 ### Langkah 5 – Buat proyek terpisah untuk dua anotator
 
-> ⚠️ **Prinsip kritis:** Hasil anotator 1 **TIDAK BOLEH** dilihat anotator 2 sebelum adjudikasi.
+> ⚠️ Hasil anotator 1 **TIDAK BOLEH** dilihat anotator 2 sebelum adjudikasi.
 
-**Cara membuat dua proyek terpisah:**
-
-1. **Proyek Anotator 1 (`an1`):**
-   - Login sebagai admin di Label Studio
-   - Buat proyek baru: nama `Anotasi-Korpus-an1`
-   - Impor `data/labelstudio/tasks_an1_korpus-anotasi.json`
-   - Undang user dengan akun `an1`; **jangan** undang `an2`
-
-2. **Proyek Anotator 2 (`an2`):**
-   - Buat proyek baru terpisah: nama `Anotasi-Korpus-an2`
-   - Impor `data/labelstudio/tasks_an2_korpus-anotasi.json`
-   - Undang user dengan akun `an2`; **jangan** undang `an1`
-
-**Atau, jika hanya satu mesin:**
-```powershell
-# Jalankan dua instance Label Studio pada port berbeda
-# Instance 1 (untuk an1):
-label-studio start --port 8080
-
-# Instance 2 (untuk an2) - buka terminal baru:
-label-studio start --port 8081 --data-dir .label-studio-an2
-```
+Buat **dua proyek terpisah** di Label Studio, masing-masing hanya diakses oleh satu anotator.
 
 ---
 
 ### Langkah 6 – Ekspor dan konversi anotasi ke CSV
 
-**Di Label Studio:**
-1. Buka proyek → klik **Export**
-2. Pilih format **JSON** (bukan JSON-MIN)
-3. Simpan file ke `data/exports/export_an1.json` (atau `export_an2.json`)
-
-**Konversi ke CSV penelitian:**
+**Di Label Studio:** Export → JSON → simpan ke `data/exports/`
 
 ```powershell
-# Konversi anotasi anotator 1
 python scripts\convert_labelstudio_export.py `
     --input data\exports\export_an1.json `
     --output data\processed\anotasi_an1.csv `
     --anotator-id an1
 
-# Konversi anotasi anotator 2
 python scripts\convert_labelstudio_export.py `
     --input data\exports\export_an2.json `
     --output data\processed\anotasi_an2.csv `
     --anotator-id an2
 ```
 
-> ℹ️ Skrip ini **tidak menimpa** file anotasi yang sudah ada. Ganti nama file lama jika perlu mengonversi ulang.
+> ⚠️ Jika UP=Tidak tetapi label tambahan terisi → **error eksplisit**, task tidak dikonversi. Perbaiki di Label Studio dan ekspor ulang. Hasil audit disimpan di `audit_konversi_anotasi_*.csv`.
 
 ---
 
@@ -263,13 +184,7 @@ python scripts\validate_annotations.py `
     --segmen data\processed\segmen.csv `
     --abstrak data\processed\abstrak.csv `
     --output-dir data\processed
-
-# Output:
-#   data\processed\laporan_validasi.csv          (detail per masalah)
-#   data\processed\laporan_validasi_ringkasan.txt
 ```
-
-> ⚠️ Perbaiki semua **ERROR** sebelum melanjutkan. **WARNING** dicatat tetapi tidak memblokir proses.
 
 ---
 
@@ -280,52 +195,48 @@ python scripts\build_adjudication_queue.py `
     --anotasi-1 data\processed\anotasi_an1.csv `
     --anotasi-2 data\processed\anotasi_an2.csv `
     --output data\processed\adjudikasi.csv
-
-# Untuk mode satu anotator (tanpa --anotasi-2):
-python scripts\build_adjudication_queue.py `
-    --anotasi-1 data\processed\anotasi_an1.csv `
-    --output data\processed\adjudikasi.csv
 ```
 
-**Antrean adjudikasi masuk jika:**
-- Label kedua anotator berbeda
-- Salah satu memberi flag (B1–B6)
-- Salah satu memberi label TT
-
-**Adjudikator mengisi kolom berikut di `adjudikasi.csv`:**
-- `label_akhir` – label final menurut pedoman
-- `label_alt_sisa` – alternatif yang tersisa
-- `status_akhir` – `final` | `batas-sisa` | `dikecualikan`
-- `konteks_dipakai` – `ya` atau `tidak` (hanya sah pada B2/B3)
-- `alasan` – alasan keputusan
-- `adjudikator_id` – ID adjudikator
-- `waktu_selesai` – waktu selesai adjudikasi
-
-> ⚠️ Sistem **tidak otomatis** memilih label. Adjudikator adalah orang ketiga yang **wajib** membaca seluruh abstrak dan pedoman v1.0.
+**Adjudikator mengisi kolom:** `label_akhir`, `label_alt_sisa`, `status_akhir`, `konteks_dipakai`, `alasan`, `adjudikator_id`, `waktu_selesai`
 
 ---
 
-### Langkah 9 – Hitung kelengkapan abstrak
+### Langkah 9 – Buat ground truth lengkap
+
+> ⚠️ **WAJIB sebelum menghitung kelengkapan.** Langkah ini menggabungkan SELURUH segmen (konsensus + adjudikasi) menjadi satu dataset.
+
+```powershell
+python scripts\build_ground_truth.py `
+    --segmen data\processed\segmen.csv `
+    --anotasi-1 data\processed\anotasi_an1.csv `
+    --anotasi-2 data\processed\anotasi_an2.csv `
+    --adjudikasi data\processed\adjudikasi.csv `
+    --output-dir data\processed
+```
+
+**Yang dilakukan:**
+- Segmen konsensus (tanpa flag/TT, kedua anotator sepakat) → `status_akhir = final, sumber = konsensus`
+- Segmen yang perlu adjudikasi + keputusan sudah ada → `status_akhir = final/batas-sisa/dikecualikan`
+- Segmen yang perlu adjudikasi tapi **belum ada keputusan** → `status_akhir = belum-selesai` (error di log)
+
+> ⚠️ Jangan jalankan Langkah 10 jika masih ada `belum-selesai` di `ground_truth.csv`.
+
+---
+
+### Langkah 10 – Hitung kelengkapan abstrak
 
 ```powershell
 python scripts\calculate_completeness.py `
-    --adjudikasi data\processed\adjudikasi.csv `
+    --ground-truth data\processed\ground_truth.csv `
     --abstrak data\processed\abstrak.csv `
     --output-dir data\processed
-
-# Output:
-#   data\processed\kelengkapan_abstrak.csv    (vektor per abstrak)
-#   data\processed\ringkasan_kelengkapan.txt  (statistik per jenis studi)
 ```
 
-**Kolom penting di `kelengkapan_abstrak.csv`:**
-- `vektor` – `(LB,TJ,MT,HS,SI)`, mis. `(1,1,1,1,0)`
-- `status` – `LENGKAP` | `TIDAK LENGKAP` | `TAK PASTI`
-- `komponen_hilang` – mis. `SI` atau `HS, SI`
-- `status_kepastian` – `pasti` | `TAK PASTI`
-- `vmin_vektor`, `vmaks_vektor` – untuk analisis sensitivitas
-
-> ℹ️ Abstrak `TAK PASTI` (v-min ≠ v-maks) **tidak masuk metrik utama** dan dilaporkan terpisah pada analisis sensitivitas.
+**Status kelengkapan:**
+- `LENGKAP` — v = (1,1,1,1,1), kepastian pasti
+- `TIDAK LENGKAP` — ada komponen hilang, kepastian pasti
+- `TAK PASTI` — v-min ≠ v-maks (ada segmen batas-sisa dengan alternatif berbeda)
+- `BLOKIR-TT` — ada label TT yang belum diselesaikan; tidak masuk metrik utama
 
 ---
 
@@ -337,26 +248,28 @@ data/
 ├── templates/
 │   └── abstrak_input_template.csv
 ├── processed/
-│   ├── abstrak.csv               # Metadata + teks mentah + teks kerja
-│   ├── log_normalisasi.csv       # Log perubahan normalisasi
-│   ├── log_dedup.csv             # Log deduplikasi
-│   ├── kandidat_segmen.csv       # Kandidat segmen (belum dibekukan)
-│   ├── review_segmentasi_*.csv   # File review per abstrak (untuk pemeriksa)
-│   ├── segmen.csv                # Segmen yang sudah dibekukan (dibuat manual)
-│   ├── anotasi_an1.csv           # Anotasi anotator 1
-│   ├── anotasi_an2.csv           # Anotasi anotator 2
-│   ├── adjudikasi.csv            # Antrean adjudikasi + hasil adjudikator
-│   ├── kelengkapan_abstrak.csv   # Vektor kelengkapan per abstrak
-│   ├── ringkasan_kelengkapan.txt
-│   ├── laporan_validasi.csv
-│   └── laporan_validasi_ringkasan.txt
+│   ├── abstrak.csv               # Metadata + teks kerja + status dedup
+│   ├── log_normalisasi.csv
+│   ├── log_dedup.csv             # Duplikat dekat perlu ditinjau di sini
+│   ├── kandidat_segmen.csv       # Kandidat segmen (sebelum dibekukan)
+│   ├── review_segmentasi_*.csv   # Review per abstrak
+│   ├── segmen.csv                # Segmen dibekukan (dibuat manual)
+│   ├── anotasi_an1.csv
+│   ├── anotasi_an2.csv
+│   ├── audit_konversi_anotasi_an1.csv  # Audit field konversi (UP, dll.)
+│   ├── audit_konversi_anotasi_an2.csv
+│   ├── adjudikasi.csv            # Antrean + keputusan adjudikasi
+│   ├── ground_truth.csv          # ← DATASET FINAL (semua segmen)
+│   ├── laporan_ground_truth.txt
+│   ├── kelengkapan_abstrak.csv
+│   └── ringkasan_kelengkapan.txt
 ├── labelstudio/
-│   ├── tasks_an1_*.json          # Task JSON untuk anotator 1
-│   ├── tasks_an2_*.json          # Task JSON untuk anotator 2
-│   └── seed_info.json            # Seed acak untuk reproduksi
+│   ├── tasks_an1_*.json
+│   ├── tasks_an2_*.json
+│   └── seed_info.json
 └── exports/
-    ├── export_an1.json           # Ekspor mentah Label Studio an1
-    └── export_an2.json           # Ekspor mentah Label Studio an2
+    ├── export_an1.json
+    └── export_an2.json
 ```
 
 ---
@@ -364,61 +277,40 @@ data/
 ## 6. Cara Menjalankan Unit Test
 
 ```powershell
-# Dari direktori proyek
 cd "c:\Users\ahmad\OneDrive\Documents\semester_7\Tugas Akhir\Label dataset"
-
-# Jalankan semua test dengan output verbose
 python tests\test_pipeline.py
 
-# Atau dengan pytest (jika terinstal)
-pip install pytest
+# Atau dengan pytest:
 python -m pytest tests\test_pipeline.py -v
 ```
 
-**Kelompok test yang tersedia (53 test total):**
+**67 test, 11 kelompok:**
 
-| Kelas | Jumlah Test | Cakupan |
+| Kelompok | Test | Cakupan |
 |---|---|---|
-| `TestNormalisasi` | 7 | Normalisasi ligatur, baris, spasi, SHA-256 |
-| `TestDeduplikasi` | 8 | DOI, hash, Jaccard, non-hapus-diam-diam |
-| `TestSegmentasi` | 8 | Kalimat normal, singkatan, URL, angka, urutan |
-| `TestKonversiLS` | 7 | Label tunggal/ganda, UP, label alt |
-| `TestValidasiMultiLabel` | 7 | TT+B2, flag+alasan, 3label+B5, label ganda+UP |
-| `TestAdjudikasi` | 7 | Antrean: beda label, flag, TT, mode 1 anotator |
-| `TestKelengkapan` | 9 | LENGKAP/TIDAK LENGKAP/TAK PASTI, K2, K3, K5 |
-
-> ⚠️ Semua data uji bertanda `[SINTETIS]` atau menggunakan prefix `TEST_`. Tidak boleh dicampur dengan data penelitian asli.
+| `TestNormalisasi` | 8 | Ligatur, baris, spasi, SHA-256, log |
+| `TestDeduplikasi` | 8 | DOI, hash, Jaccard, near-dup tidak dihapus |
+| `TestValidasiPrepareFatal` | 4 | Fatal errors menghentikan pipeline, tidak ada output |
+| `TestSegmentasi` | 7 | Kalimat, singkatan, desimal, tanda tanya, B5, urutan |
+| `TestSegmentasiURLDOI` | 3 | URL/DOI tidak menelan titik penutup kalimat |
+| `TestKonversiLS` | 7 | Label tunggal/ganda, UP, label alt valid |
+| `TestKonversiLSError` | 2 | UP=Tidak + label terisi → error eksplisit |
+| `TestGroundTruth` | 8 | Konsensus, adj, flag, TT, dikecualikan, segmen luar antrean |
+| `TestKelengkapan` | 11 | LENGKAP/TIDAK LENGKAP, K2, K3, K5, v-min, v-maks |
+| `TestKelengkapanTT` | 2 | BLOKIR-TT, pending |
+| `TestIntegrasi` | 3 | End-to-end: prepare, GT+kelengkapan, near-dup blokir |
 
 ---
 
 ## 7. Keterbatasan Fitur Label Studio
 
-Berikut fitur pedoman yang **tidak dapat diterapkan sepenuhnya** melalui fitur bawaan Label Studio v1.x, beserta mitigasi yang sudah diterapkan di Python:
-
-### 7.1 Tampilan kondisional (conditional display)
-**Keterbatasan:** Label Studio tidak mendukung tampilan field yang berubah secara kondisional berdasarkan nilai field lain (mis. tampilkan `label_2` hanya jika `uji_pemecahan = Ya`).
-
-**Mitigasi:** Field `label_2`–`label_6` dan `pemicu_up` selalu ditampilkan. Validasi kondisional dilakukan oleh `validate_annotations.py` (Aturan 6 & 7).
-
-### 7.2 Pencatatan waktu mulai (waktu_mulai)
-**Keterbatasan:** Label Studio tidak menyimpan waktu saat anotator pertama kali membuka sebuah task (waktu_mulai). Yang tersedia hanya `completed_at` (waktu menyimpan anotasi).
-
-**Mitigasi:** Kolom `waktu_mulai` dan `durasi_detik` dikosongkan di `anotasi.csv`. Jika pencatatan waktu diperlukan, gunakan Label Studio SDK dengan event tracking kustom.
-
-### 7.3 Validasi lintas-field otomatis
-**Keterbatasan:** Label Studio tidak mendukung validasi seperti "jika label = TT maka flag harus B2" secara native di antarmuka.
-
-**Mitigasi:** Semua validasi lintas-field dilakukan oleh `validate_annotations.py` setelah ekspor.
-
-### 7.4 Urutan label ganda
-**Keterbatasan:** Label Studio tidak memaksa anotator mengisi label dalam urutan kemunculan teks.
-
-**Mitigasi:** Instruksi urutan ditampilkan eksplisit di antarmuka. Pengecekan urutan adalah tanggung jawab anotator; `validate_annotations.py` memperingatkan jika ada ketidakwajaran.
-
-### 7.5 Pencegahan anotator melihat hasil anotator lain
-**Keterbatasan:** Dalam satu proyek Label Studio, anggota bisa melihat anotasi satu sama lain jika diizinkan.
-
-**Mitigasi:** Buat dua **proyek terpisah** untuk dua anotator. Jangan tambahkan anotator ke proyek yang bukan miliknya (lihat Langkah 5).
+| Keterbatasan | Mitigasi |
+|---|---|
+| Conditional display (tampilkan label_2 hanya jika UP=Ya) | Field label_2–6 selalu tampil; validasi kondisional di `convert_labelstudio_export.py` dan `validate_annotations.py` |
+| UP=Tidak tapi label_2 terisi → sebelumnya dibuang diam-diam | Sekarang **error eksplisit**; task tidak dikonversi |
+| `waktu_mulai` tidak tersedia dari ekspor standar | Kolom dikosongkan; audit di `audit_konversi_*.csv` |
+| Validasi lintas-field otomatis | Dilakukan `validate_annotations.py` pasca-ekspor |
+| Anotator bisa melihat hasil satu sama lain dalam satu proyek | Buat **dua proyek terpisah** (lihat Langkah 5) |
 
 ---
 
@@ -427,32 +319,32 @@ Berikut fitur pedoman yang **tidak dapat diterapkan sepenuhnya** melalui fitur b
 ```
 Label dataset/
 ├── config/
-│   └── label_studio_config.xml       # Konfigurasi antarmuka Label Studio
+│   └── label_studio_config.xml
 ├── data/
-│   ├── templates/
-│   │   └── abstrak_input_template.csv
-│   ├── raw/                           # Taruh file CSV input di sini
-│   ├── processed/                     # Output pipeline
-│   ├── labelstudio/                   # Task JSON untuk Label Studio
-│   └── exports/                       # Ekspor mentah dari Label Studio
+│   ├── templates/abstrak_input_template.csv
+│   ├── raw/
+│   ├── processed/
+│   ├── labelstudio/
+│   └── exports/
 ├── scripts/
-│   ├── prepare_abstrak.py             # Normalisasi, hash, deduplikasi
-│   ├── segment_abstrak.py             # Segmentasi kalimat berbasis aturan
-│   ├── prepare_labelstudio_tasks.py   # Buat task JSON untuk Label Studio
-│   ├── convert_labelstudio_export.py  # Konversi ekspor LS ke anotasi.csv
-│   ├── validate_annotations.py        # Validator 15 aturan penelitian
-│   ├── build_adjudication_queue.py    # Susun antrean adjudikasi
-│   └── calculate_completeness.py      # Hitung vektor kelengkapan
+│   ├── prepare_abstrak.py             # Normalisasi, hash, dedup (fatal errors)
+│   ├── segment_abstrak.py             # Segmentasi + blokir near-dup
+│   ├── prepare_labelstudio_tasks.py   # Task JSON per anotator
+│   ├── convert_labelstudio_export.py  # Konversi ekspor LS → anotasi.csv
+│   ├── validate_annotations.py        # 15 aturan validasi
+│   ├── build_adjudication_queue.py    # Antrean adjudikasi
+│   ├── build_ground_truth.py          # ← BARU: Ground truth lengkap
+│   └── calculate_completeness.py      # Kelengkapan dari ground_truth.csv
 ├── tests/
-│   └── test_pipeline.py               # 53 unit test dengan data sintetis
-├── pedoman_v1.0_beku.md               # Pedoman Anotasi v1.0 (dibekukan)
+│   └── test_pipeline.py               # 67 test (produksi + integrasi)
+├── pedoman_v1.0_beku.md               # Pedoman Anotasi v1.0 (JANGAN DIUBAH)
 ├── requirements.txt
 └── README.md
 ```
 
 ---
 
-## Referensi Cepat: Perintah Lengkap (Copy-Paste)
+## Referensi Cepat (Copy-Paste PowerShell)
 
 ```powershell
 # 0. Setup
@@ -460,22 +352,22 @@ cd "c:\Users\ahmad\OneDrive\Documents\semester_7\Tugas Akhir\Label dataset"
 python -m venv .venv; .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# 1. Persiapan abstrak
+# 1. Persiapan abstrak (fatal jika metadata tidak valid)
 python scripts\prepare_abstrak.py --input data\raw\abstrak_input.csv --output-dir data\processed
 
-# 2. Segmentasi
+# 2. Segmentasi (near-dup diblokir)
 python scripts\segment_abstrak.py --abstrak data\processed\abstrak.csv --output-dir data\processed
 
-# 3. [MANUAL] Periksa review_segmentasi_*.csv → susun segmen.csv dengan status_beku=disetujui
+# 3. [MANUAL] Review review_segmentasi_*.csv → susun segmen.csv
 
-# 4. Buat task JSON
+# 4. Task JSON
 python scripts\prepare_labelstudio_tasks.py --segmen data\processed\segmen.csv --abstrak data\processed\abstrak.csv --output-dir data\labelstudio --anotator-ids an1,an2 --peran-data korpus-anotasi --seed 42
 
 # 5. [MANUAL] Impor ke Label Studio (dua proyek terpisah)
 
-# 6. [MANUAL] Ekspor dari Label Studio → simpan ke data\exports\
+# 6. [MANUAL] Ekspor JSON dari Label Studio → data\exports\
 
-# 7. Konversi ekspor ke CSV
+# 7. Konversi (error eksplisit jika UP=Tidak + label terisi)
 python scripts\convert_labelstudio_export.py --input data\exports\export_an1.json --output data\processed\anotasi_an1.csv --anotator-id an1
 python scripts\convert_labelstudio_export.py --input data\exports\export_an2.json --output data\processed\anotasi_an2.csv --anotator-id an2
 
@@ -487,9 +379,12 @@ python scripts\build_adjudication_queue.py --anotasi-1 data\processed\anotasi_an
 
 # 10. [MANUAL] Isi adjudikasi.csv oleh adjudikator
 
-# 11. Kelengkapan
-python scripts\calculate_completeness.py --adjudikasi data\processed\adjudikasi.csv --abstrak data\processed\abstrak.csv --output-dir data\processed
+# 11. Ground truth lengkap (WAJIB sebelum kelengkapan)
+python scripts\build_ground_truth.py --segmen data\processed\segmen.csv --anotasi-1 data\processed\anotasi_an1.csv --anotasi-2 data\processed\anotasi_an2.csv --adjudikasi data\processed\adjudikasi.csv --output-dir data\processed
 
-# 12. Unit test
+# 12. Kelengkapan (dari ground_truth.csv, bukan adjudikasi.csv)
+python scripts\calculate_completeness.py --ground-truth data\processed\ground_truth.csv --abstrak data\processed\abstrak.csv --output-dir data\processed
+
+# 13. Unit test
 python tests\test_pipeline.py
 ```

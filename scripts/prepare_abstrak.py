@@ -15,26 +15,31 @@ CATATAN IMPLEMENTASI:
   lalu Jaccard 5-gram kata (threshold >= 0.90).
 - Duplikat dekat TIDAK dihapus secara diam-diam; hanya ditandai untuk review manual.
 
+ERROR FATAL (menghentikan pipeline, tidak menghasilkan output):
+- Metadata wajib kosong atau nilai enum tidak valid
+- ID abstrak duplikat dalam satu file input
+- Satu artikel dipakai di lebih dari satu peran data
+
+ERROR NON-FATAL (warning, pipeline tetap jalan):
+- Duplikat dekat Jaccard >= 0.90 — ditandai untuk review manual
+
 Penggunaan:
-    python scripts/prepare_abstrak.py \
-        --input data/templates/abstrak_input_template.csv \
-        --output-dir data/processed \
+    python scripts/prepare_abstrak.py \\
+        --input data/raw/abstrak_input.csv \\
+        --output-dir data/processed \\
         [--skip-near-dup]
 """
 
 import argparse
 import csv
 import hashlib
-import json
 import logging
 import re
+import sys
 import unicodedata
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-# ---------------------------------------------------------------------------
-# Konfigurasi logging
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -57,10 +62,6 @@ KOLOM_WAJIB: List[str] = [
     "id_abstrak", "judul", "jurnal", "tahun", "jenis_studi",
     "peran_data", "teks_mentah",
 ]
-KOLOM_OPSIONAL: List[str] = [
-    "volume_nomor", "doi", "url", "jenis_sumber", "versi_dokumen",
-    "tanggal_akses", "lisensi",
-]
 NEAR_DUP_THRESHOLD: float = 0.90  # Jaccard 5-gram kata (Bagian 2.5 butir 3)
 
 
@@ -76,18 +77,15 @@ def sha256_text(text: str) -> str:
 # Normalisasi minimal (Bagian 2.2)
 # ---------------------------------------------------------------------------
 
-# Peta ligatur Unicode ke karakter biasa
 _LIGATURE_MAP: Dict[str, str] = {
-    "\ufb00": "ff",   # ﬀ
-    "\ufb01": "fi",   # ﬁ
-    "\ufb02": "fl",   # ﬂ
-    "\ufb03": "ffi",  # ﬃ
-    "\ufb04": "ffl",  # ﬄ
-    "\ufb05": "st",   # ﬅ
-    "\ufb06": "st",   # ﬆ
-    # tambahkan ligatur lain jika diperlukan
+    "\ufb00": "ff",
+    "\ufb01": "fi",
+    "\ufb02": "fl",
+    "\ufb03": "ffi",
+    "\ufb04": "ffl",
+    "\ufb05": "st",
+    "\ufb06": "st",
 }
-
 _LIGATURE_RE = re.compile("|".join(re.escape(k) for k in _LIGATURE_MAP))
 
 
@@ -116,23 +114,18 @@ def normalize_ligatures(text: str) -> Tuple[str, List[Dict]]:
 def normalize_minimal(teks_mentah: str) -> Tuple[str, List[Dict]]:
     """
     Normalisasi minimal sesuai Bagian 2.2:
-    1. Menyambungkan kata yang terpotong karena pergantian baris (soft hyphen).
-    2. Menghilangkan pemisah baris dari tata letak dokumen.
-    3. Merapikan spasi ganda.
-    4. Menormalkan ligatur.
-
+    1. Ligatur Unicode
+    2. Sambung kata terpotong (soft hyphen + newline)
+    3. Hapus baris tata letak -> spasi
+    4. Rapikan spasi ganda
     Tidak memperbaiki ejaan atau tata bahasa.
-    Mengembalikan (teks_kerja, daftar_perubahan).
     """
     changes: List[Dict] = []
     text = teks_mentah
 
-    # 1. Normalisasi ligatur
     text, lig_changes = normalize_ligatures(text)
     changes.extend(lig_changes)
 
-    # 2. Sambung kata terpotong di akhir baris: "kata-\nbaru" -> "katabaru"
-    #    (soft hyphen sebelum newline)
     pattern_hyphen_newline = re.compile(r"-\n(\S)")
 
     def _fix_hyphen(m: re.Match) -> str:
@@ -146,33 +139,19 @@ def normalize_minimal(teks_mentah: str) -> Tuple[str, List[Dict]]:
 
     text = pattern_hyphen_newline.sub(_fix_hyphen, text)
 
-    # 3. Hapus pemisah baris tata letak: newline yang bukan pemisah kalimat
-    #    -> ganti dengan spasi
-    lines_before = text.split("\n")
-    new_lines = []
-    for i, line in enumerate(lines_before):
-        stripped = line.rstrip()
-        if stripped:
-            new_lines.append(stripped)
-        else:
-            new_lines.append("")  # baris kosong tetap sebagai pemisah paragraf
+    n_newlines = text.count("\n")
+    lines = [l.rstrip() for l in text.split("\n")]
+    new_text = " ".join(l for l in lines if l)
+    if n_newlines > 0:
+        changes.append({
+            "posisi_karakter": 0,
+            "teks_asal": f"[{n_newlines} karakter newline]",
+            "teks_baru": "[diganti spasi]",
+            "jenis": "hapus_baris",
+        })
 
-    new_text = " ".join(l for l in new_lines if l)
-    if new_text != text:
-        # Catat jumlah baris yang dihapus
-        n_newlines = text.count("\n")
-        if n_newlines > 0:
-            changes.append({
-                "posisi_karakter": 0,
-                "teks_asal": f"[{n_newlines} karakter newline]",
-                "teks_baru": "[diganti spasi]",
-                "jenis": "hapus_baris",
-            })
-    text = new_text
-
-    # 4. Rapikan spasi ganda
-    text_clean = re.sub(r" {2,}", " ", text)
-    if text_clean != text:
+    text_clean = re.sub(r" {2,}", " ", new_text)
+    if text_clean != new_text:
         changes.append({
             "posisi_karakter": 0,
             "teks_asal": "[spasi ganda]",
@@ -209,7 +188,7 @@ def normalize_title(title: str) -> str:
 
 
 def normalize_text_for_hash(text: str) -> str:
-    """Normalisasi teks untuk hash duplikat: huruf kecil, tanpa tanda baca, spasi tunggal."""
+    """Normalisasi teks untuk hash duplikat."""
     text = unicodedata.normalize("NFC", text.lower())
     text = re.sub(r"[^\w\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
@@ -217,7 +196,7 @@ def normalize_text_for_hash(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Jaccard 5-gram kata untuk duplikat dekat
+# Jaccard 5-gram kata
 # ---------------------------------------------------------------------------
 
 def word_ngrams(text: str, n: int = 5) -> Set[Tuple[str, ...]]:
@@ -242,7 +221,10 @@ def jaccard_similarity(set_a: Set, set_b: Set) -> float:
 # ---------------------------------------------------------------------------
 
 def validate_row(row: Dict, row_idx: int) -> List[str]:
-    """Periksa metadata wajib dan nilai enum. Kembalikan daftar pesan error."""
+    """
+    Periksa metadata wajib dan nilai enum.
+    Semua error yang dikembalikan bersifat FATAL.
+    """
     errors: List[str] = []
 
     for col in KOLOM_WAJIB:
@@ -286,18 +268,10 @@ def prepare_abstrak(
     skip_near_dup: bool = False,
 ) -> None:
     """
-    Pipeline utama:
-    1. Baca CSV input
-    2. Validasi metadata
-    3. Normalisasi minimal -> teks_kerja
-    4. Hitung hash
-    5. Deduplikasi
-    6. Tulis abstrak.csv, log_normalisasi.csv, log_dedup.csv
+    Pipeline utama. Berhenti dan tidak menulis output jika ada fatal error.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     rows: List[Dict] = []
-    all_errors: List[str] = []
+    fatal_errors: List[str] = []
 
     # --- Baca CSV ---
     logger.info(f"Membaca input: {input_path}")
@@ -305,17 +279,63 @@ def prepare_abstrak(
         reader = csv.DictReader(
             (line for line in f if not line.lstrip().startswith("#"))
         )
-        for idx, row in enumerate(reader, start=2):  # mulai baris 2 (header di baris 1)
+        for idx, row in enumerate(reader, start=2):
             errs = validate_row(row, idx)
-            all_errors.extend(errs)
+            fatal_errors.extend(errs)
             rows.append(row)
 
-    if all_errors:
-        logger.warning(f"{len(all_errors)} masalah validasi ditemukan:")
-        for err in all_errors:
-            logger.warning(f"  {err}")
-    else:
-        logger.info("Semua baris lulus validasi metadata.")
+    # --- Periksa duplikat ID abstrak (FATAL) ---
+    id_seen: Dict[str, int] = {}
+    for idx, p in enumerate(rows, start=2):
+        aid = p.get("id_abstrak", "").strip()
+        if not aid:
+            continue
+        if aid in id_seen:
+            fatal_errors.append(
+                f"Baris {idx}: ID abstrak duplikat '{aid}' "
+                f"(pertama di baris {id_seen[aid]}). "
+                "ID abstrak harus unik dalam satu file input."
+            )
+        else:
+            id_seen[aid] = idx
+
+    # --- Periksa satu artikel satu peran (FATAL) ---
+    kunci_peran: Dict[str, Dict[str, str]] = {}
+    for row in rows:
+        doi_n = normalize_doi(row.get("doi", ""))
+        if doi_n:
+            k = f"doi:{doi_n}"
+        else:
+            jn = normalize_title(row.get("judul", ""))
+            th = str(row.get("tahun", "")).strip()
+            jr = normalize_title(row.get("jurnal", ""))
+            k = f"title:{jn}|{th}|{jr}"
+        peran = row.get("peran_data", "").strip()
+        aid = row.get("id_abstrak", "").strip()
+        if k in kunci_peran and kunci_peran[k]["peran"] != peran and k not in ("doi:", "title:||"):
+            fatal_errors.append(
+                f"ID '{aid}' (kunci: {k}): artikel yang sama digunakan di "
+                f"peran '{peran}' DAN '{kunci_peran[k]['peran']}' "
+                f"(lihat juga '{kunci_peran[k]['id']}'). "
+                "Satu artikel hanya boleh ada di satu peran data."
+            )
+        elif k not in kunci_peran:
+            kunci_peran[k] = {"peran": peran, "id": aid}
+
+    # --- FATAL: hentikan sebelum output ---
+    if fatal_errors:
+        logger.error(
+            f"FATAL: {len(fatal_errors)} error ditemukan. "
+            "Pipeline dihentikan. Tidak ada berkas output yang dihasilkan."
+        )
+        for err in fatal_errors:
+            logger.error(f"  {err}")
+        raise SystemExit(
+            f"Pipeline dihentikan karena {len(fatal_errors)} fatal error."
+        )
+
+    logger.info("Semua baris lulus validasi metadata.")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Normalisasi dan hash ---
     norm_log_rows: List[Dict] = []
@@ -325,17 +345,11 @@ def prepare_abstrak(
         id_abstrak = row.get("id_abstrak", "").strip()
         teks_mentah = row.get("teks_mentah", "")
 
-        # Hash teks mentah (sebelum normalisasi)
         hash_mentah = sha256_text(teks_mentah)
-
-        # Normalisasi minimal
         teks_kerja, changes = normalize_minimal(teks_mentah)
-
-        # Hash teks kerja ternormalisasi (untuk deduplikasi)
         teks_ternormalisasi = normalize_text_for_hash(teks_kerja)
         hash_ternormalisasi = sha256_text(teks_ternormalisasi)
 
-        # Catat perubahan normalisasi
         for ch in changes:
             norm_log_rows.append({
                 "id_abstrak": id_abstrak,
@@ -345,7 +359,6 @@ def prepare_abstrak(
                 "jenis": ch["jenis"],
             })
 
-        # Hitung kunci artikel
         doi_norm = normalize_doi(row.get("doi", ""))
         if doi_norm:
             kunci_artikel = f"doi:{doi_norm}"
@@ -356,7 +369,6 @@ def prepare_abstrak(
             kunci_artikel = f"title:{judul_norm}|{tahun}|{jurnal_norm}"
 
         processed.append({
-            # metadata asli
             "id_abstrak": id_abstrak,
             "bahasa": "id",
             "peran_data": row.get("peran_data", "").strip(),
@@ -370,31 +382,18 @@ def prepare_abstrak(
             "jenis_sumber": row.get("jenis_sumber", "").strip(),
             "versi_dokumen": row.get("versi_dokumen", "").strip(),
             "tanggal_akses": row.get("tanggal_akses", "").strip(),
-            "teks_mentah": teks_mentah,  # TIDAK PERNAH DIUBAH
+            "teks_mentah": teks_mentah,
             "hash_teks_mentah": hash_mentah,
             "teks_kerja": teks_kerja,
             "lisensi": row.get("lisensi", "").strip(),
             "kunci_artikel": kunci_artikel,
             "hash_teks_ternormalisasi": hash_ternormalisasi,
-            "status_dedup": "unik",  # default; akan diperbarui saat deduplikasi
+            "status_dedup": "unik",
         })
-
-    # --- Periksa duplikat ID abstrak ---
-    id_set: Set[str] = set()
-    for p in processed:
-        if p["id_abstrak"] in id_set:
-            logger.error(
-                f"ID abstrak duplikat: '{p['id_abstrak']}'. "
-                "ID abstrak harus unik dalam satu file input."
-            )
-        id_set.add(p["id_abstrak"])
 
     # --- Deduplikasi (Bagian 2.5) ---
     dedup_log: List[Dict] = []
     dedup_log = run_deduplication(processed, dedup_log, skip_near_dup)
-
-    # --- Periksa satu artikel satu peran (Bagian 2.5 butir 5) ---
-    check_single_role(processed, dedup_log)
 
     # --- Tulis abstrak.csv ---
     abstrak_path = output_dir / "abstrak.csv"
@@ -409,15 +408,11 @@ def prepare_abstrak(
     write_csv(abstrak_path, abstrak_cols, processed)
     logger.info(f"abstrak.csv ditulis: {abstrak_path} ({len(processed)} baris)")
 
-    # --- Tulis log_normalisasi.csv ---
     norm_path = output_dir / "log_normalisasi.csv"
     norm_cols = ["id_abstrak", "posisi_karakter", "teks_asal", "teks_baru", "jenis"]
     write_csv(norm_path, norm_cols, norm_log_rows)
-    logger.info(
-        f"log_normalisasi.csv ditulis: {norm_path} ({len(norm_log_rows)} perubahan)"
-    )
+    logger.info(f"log_normalisasi.csv ditulis: {norm_path} ({len(norm_log_rows)} perubahan)")
 
-    # --- Tulis log_dedup.csv ---
     dedup_path = output_dir / "log_dedup.csv"
     dedup_cols = [
         "id_abstrak_dibuang", "id_abstrak_disimpan",
@@ -426,7 +421,6 @@ def prepare_abstrak(
     write_csv(dedup_path, dedup_cols, dedup_log)
     logger.info(f"log_dedup.csv ditulis: {dedup_path} ({len(dedup_log)} entri)")
 
-    # --- Ringkasan ---
     n_unik = sum(1 for p in processed if p["status_dedup"] == "unik")
     n_buang = sum(1 for p in processed if p["status_dedup"] == "duplikat-dibuang")
     n_dekat = sum(1 for p in processed if p["status_dedup"] == "duplikat-dekat-ditinjau")
@@ -435,11 +429,11 @@ def prepare_abstrak(
         f"{n_unik} unik | {n_buang} duplikat dibuang | "
         f"{n_dekat} duplikat dekat (perlu review manual)"
     )
-
-    if all_errors:
+    if n_dekat > 0:
         logger.warning(
-            f"Ada {len(all_errors)} peringatan validasi. "
-            "Periksa log di atas sebelum melanjutkan ke segmentasi."
+            f"{n_dekat} duplikat dekat ditandai 'duplikat-dekat-ditinjau'. "
+            "WAJIB ditinjau sebelum segmentasi. "
+            "Segmentasi akan diblokir untuk abstrak ini sampai review selesai."
         )
 
 
@@ -449,14 +443,11 @@ def run_deduplication(
     skip_near_dup: bool,
 ) -> List[Dict]:
     """
-    Jalankan deduplikasi sesuai Bagian 2.5:
-    1. Kunci artikel (DOI atau judul+tahun+jurnal)
-    2. Hash teks ternormalisasi
-    3. Jaccard 5-gram >= 0.90 (jika tidak di-skip)
-    Tandai status_dedup tanpa menghapus baris.
+    Jalankan deduplikasi sesuai Bagian 2.5.
+    Duplikat dekat TIDAK dihapus otomatis — ditandai untuk review manual.
     """
     # 1. Deduplikasi kunci artikel
-    kunci_seen: Dict[str, str] = {}  # kunci -> id_abstrak pertama
+    kunci_seen: Dict[str, str] = {}
     for row in rows:
         k = row["kunci_artikel"]
         if k in kunci_seen:
@@ -471,8 +462,7 @@ def run_deduplication(
                     "skor_jaccard": "",
                 })
                 logger.warning(
-                    f"Duplikat kunci artikel: '{row['id_abstrak']}' == '{first_id}' "
-                    f"(kunci: {k})"
+                    f"Duplikat kunci artikel: '{row['id_abstrak']}' == '{first_id}'"
                 )
         else:
             kunci_seen[k] = row["id_abstrak"]
@@ -490,7 +480,7 @@ def run_deduplication(
                 "id_abstrak_dibuang": row["id_abstrak"],
                 "id_abstrak_disimpan": first_id,
                 "jenis_duplikat": "hash-teks",
-                "alasan": "Hash teks ternormalisasi identik (teks persis sama)",
+                "alasan": "Hash teks ternormalisasi identik",
                 "skor_jaccard": "1.0",
             })
             logger.warning(
@@ -520,7 +510,6 @@ def run_deduplication(
                     ngrams_cache[row_b["id_abstrak"]],
                 )
                 if sim >= NEAR_DUP_THRESHOLD:
-                    # Tandai yang kedua; jangan hapus otomatis
                     row_b["status_dedup"] = "duplikat-dekat-ditinjau"
                     dedup_log.append({
                         "id_abstrak_dibuang": row_b["id_abstrak"],
@@ -528,7 +517,7 @@ def run_deduplication(
                         "jenis_duplikat": "duplikat-dekat",
                         "alasan": (
                             f"Jaccard 5-gram = {sim:.4f} >= {NEAR_DUP_THRESHOLD}. "
-                            "PERLU REVIEW MANUAL sebelum melanjutkan."
+                            "PERLU REVIEW MANUAL. Segmentasi diblokir."
                         ),
                         "skor_jaccard": f"{sim:.4f}",
                     })
@@ -541,42 +530,15 @@ def run_deduplication(
     return dedup_log
 
 
-def check_single_role(rows: List[Dict], dedup_log: List[Dict]) -> None:
-    """
-    Periksa Bagian 2.5 butir 5: satu artikel tidak boleh ada di dua peran data.
-    Gunakan kunci artikel untuk identifikasi.
-    """
-    kunci_to_roles: Dict[str, List[Tuple[str, str]]] = {}
-    for row in rows:
-        k = row["kunci_artikel"]
-        if k not in kunci_to_roles:
-            kunci_to_roles[k] = []
-        kunci_to_roles[k].append((row["id_abstrak"], row["peran_data"]))
-
-    for k, entries in kunci_to_roles.items():
-        roles = {e[1] for e in entries}
-        if len(roles) > 1:
-            ids = [e[0] for e in entries]
-            logger.error(
-                f"PELANGGARAN SATU ARTIKEL SATU PERAN: kunci '{k}' "
-                f"muncul di peran berbeda: {entries}. "
-                "Artikel yang sama tidak boleh ada di data-pengembangan, "
-                "pilot2, DAN korpus-anotasi sekaligus."
-            )
-
-
 # ---------------------------------------------------------------------------
 # Utilitas tulis CSV
 # ---------------------------------------------------------------------------
 
 def write_csv(path: Path, cols: List[str], rows: List[Dict]) -> None:
-    """Tulis CSV UTF-8 tanpa BOM, dengan quoting benar."""
+    """Tulis CSV UTF-8 tanpa BOM."""
     with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(
-            f,
-            fieldnames=cols,
-            quoting=csv.QUOTE_MINIMAL,
-            extrasaction="ignore",
+            f, fieldnames=cols, quoting=csv.QUOTE_MINIMAL, extrasaction="ignore",
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -590,21 +552,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Persiapan abstrak: normalisasi, hash, deduplikasi."
     )
-    parser.add_argument(
-        "--input", "-i",
-        required=True,
-        help="Path ke CSV input abstrak (lihat data/templates/abstrak_input_template.csv)",
-    )
-    parser.add_argument(
-        "--output-dir", "-o",
-        default="data/processed",
-        help="Direktori output (default: data/processed)",
-    )
-    parser.add_argument(
-        "--skip-near-dup",
-        action="store_true",
-        help="Lewati pemeriksaan duplikat dekat Jaccard (mempercepat proses pada korpus besar)",
-    )
+    parser.add_argument("--input", "-i", required=True,
+                        help="Path ke CSV input abstrak")
+    parser.add_argument("--output-dir", "-o", default="data/processed",
+                        help="Direktori output (default: data/processed)")
+    parser.add_argument("--skip-near-dup", action="store_true",
+                        help="Lewati pemeriksaan duplikat dekat Jaccard")
     args = parser.parse_args()
 
     prepare_abstrak(
