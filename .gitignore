@@ -8,6 +8,7 @@ __pycache__/
 
 # Local virtual environments
 .venv/
+.venv-*/
 venv/
 env/
 
@@ -23,6 +24,7 @@ data/exports/*
 data/labelstudio/*
 data/processed/*
 data/raw/*
+data/test_run_*/
 !data/exports/.gitkeep
 !data/labelstudio/.gitkeep
 !data/processed/.gitkeep
